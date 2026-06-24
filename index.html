@@ -79,7 +79,7 @@
       <ol class="guide-steps">
         <li><span class="gst" id="gst1">○</span><span class="glabel">① 無効データ(0 LSB)を除外</span><button class="gbtn" id="gstep1">実行</button></li>
         <li><span class="gst" id="gst2">○</span><span class="glabel">② 工程ごとに自動ゼロ</span><button class="gbtn" id="gstep2">実行</button></li>
-        <li><span class="gst" id="gst3">○</span><span class="glabel">③ 向きを反転(工程ごと)</span><button class="gbtn" id="gstep3">実行</button></li>
+        <li><span class="gst" id="gst3">○</span><span class="glabel">③ 各工程を＋向きに揃える</span><button class="gbtn" id="gstep3">実行</button></li>
         <li><span class="gst" id="gst4">○</span><span class="glabel">④ 反転中の区間を非表示</span><button class="gbtn" id="gstep4">実行</button></li>
         <li><span class="gst" id="gst5">○</span><span class="glabel">⑤ ゼロ中心で表示</span><button class="gbtn" id="gstep5">実行</button></li>
       </ol>
@@ -146,9 +146,10 @@
           <div class="row"><label>最小</label><input type="number" id="xMin" step="1"/></div>
           <div class="row"><label>最大</label><input type="number" id="xMax" step="1"/></div>
           <div class="row">
-            <label>時間の単位（CSV）</label>
+            <label>CSV時間列の単位</label>
             <select id="timeUnit"><option value="ms">ms</option><option value="s">s</option></select>
           </div>
+          <div class="hint">これは「読み込むCSVの時間列が何の単位か」の指定です。グラフは常に秒(s)で表示します（自動判定済み）。</div>
         </fieldset>
         <fieldset>
           <legend>力 縦軸</legend>
@@ -163,11 +164,11 @@
           <div class="row"><label>最大</label><input type="number" id="mMax" step="0.5"/></div>
         </fieldset>
         <fieldset>
-          <legend>向き補正（工程ごとに反転）</legend>
+          <legend>向き補正（各工程を＋向きに揃える）</legend>
           <div class="row"><label><input type="checkbox" id="flipEnable"/> 有効にする</label></div>
-          <div class="row"><label>反転境界 [s]</label><input type="text" id="flipBounds" class="wide" placeholder="例: 33.5（カンマ区切りで複数可）"/></div>
+          <div class="row"><label>工程の境界 [s]</label><input type="text" id="flipBounds" class="wide" placeholder="例: 33.5（カンマ区切りで複数可）"/></div>
           <div class="row"><button id="flipAutoBtn">境界を自動検出</button></div>
-          <div class="hint">境界より後ろの工程の符号を反転します（境界が複数なら交互に反転）。下の軸が反転対象です。</div>
+          <div class="hint">下でチェックした軸を、各工程ごとに「主な振れが＋」になる向きへ自動で揃えます（工程ごとに正負を判定）。</div>
           <div id="flipGrid"></div>
           <div class="row" style="margin-top:8px"><label><input type="checkbox" id="perSegZero"/> 各工程の基準を自動で0に</label></div>
           <div class="hint">上の境界で区切った工程ごとに、無負荷区間から零点を取り直します（工程間で零点がドリフトする場合に有効）。ONの間は①の零点欄より優先されます。</div>
@@ -277,7 +278,7 @@ function defaultCfg(){
     flipEnable:false, flipBounds:"", flipAxes:{}, perSegZero:false,
     boundaryHide:0, hideRanges:"", showRaw:false,
   };
-  AXES.forEach(a=>{ c.zero[a]=DEFAULT_ZERO; c.sens[a]=DEFAULT_SENS[a]; c.colors[a]=DEFAULT_COLORS[a]; c.visible[a]=true; c.flipAxes[a]=IS_MOMENT(a)?(a!=="My"):(a==="Fy"); });
+  AXES.forEach(a=>{ c.zero[a]=DEFAULT_ZERO; c.sens[a]=DEFAULT_SENS[a]; c.colors[a]=DEFAULT_COLORS[a]; c.visible[a]=true; c.flipAxes[a]=IS_MOMENT(a)?(a!=="My"):(a!=="Fz"); });
   return c;
 }
 
@@ -393,11 +394,19 @@ function guessTimeUnit(t){
   return span>300 ? "ms" : "s";
 }
 
-// ===== 向き補正（工程ごとに反転） ===========================================
-let flipSeg=null; // index毎に true=反転区間。draw/buildGroupFigureの先頭で更新
+// ===== 向き補正（選んだ軸を各工程で自動的に＋向きへ揃える） =================
+let flipSign=null;   // {axis: Int8Array(nSeg)} 各工程の符号(+1/-1)、または null
+let segOfAll=null;   // index毎の工程番号（反転境界で区切る）
 function parseBounds(){
   return (cfg.flipBounds||"").split(",").map(s=>parseFloat(s.trim()))
     .filter(v=>!isNaN(v)).sort((a,b)=>a-b);
+}
+function updateSegOf(){
+  if(!raw){ segOfAll=null; return; }
+  const bounds=parseBounds(); const ts=timeInSeconds(), n=ts.length;
+  const arr=new Int16Array(n); let si=0;
+  for(let i=0;i<n;i++){ while(si<bounds.length && ts[i]>=bounds[si]) si++; arr[i]=si; }
+  segOfAll=arr;
 }
 // 非表示区間（反転中の不要データを隠す）
 let hideMask=null; // index毎に 1=非表示
@@ -424,16 +433,29 @@ function updateHideMask(){
     if(h) hideMask[i]=1;
   }
 }
-function updateFlipSeg(){
-  if(!raw || !cfg.flipEnable || cfg.showRaw){ flipSeg=null; return; }
-  const bounds=parseBounds();
-  if(bounds.length===0){ flipSeg=null; return; }
-  const ts=timeInSeconds();
-  flipSeg=new Uint8Array(ts.length);
-  for(let i=0;i<ts.length;i++){
-    let c=0; for(const b of bounds){ if(ts[i]>=b) c++; }
-    flipSeg[i]= (c%2===1) ? 1 : 0; // 境界をまたぐ毎に反転（交互）
-  }
+// 選んだ軸を、各工程ごとに「主な振れが＋になる向き」へ自動で揃える。
+// （工程ごとに大きい振れの符号を見て、負なら反転）
+function updateFlipSign(){
+  if(!raw || !cfg.flipEnable || cfg.showRaw || !segOfAll){ flipSign=null; return; }
+  const nSeg=parseBounds().length+1, n=segOfAll.length;
+  flipSign={};
+  AXES.forEach(a=>{
+    const sign=new Int8Array(nSeg).fill(1);
+    if(cfg.flipAxes[a]){
+      const arr=raw.lsb[a], s=cfg.sens[a]||1;
+      const useSeg=(cfg.perSegZero && segZero);
+      const baseArr=useSeg?segZero.base[a]:null;
+      const w=new Float64Array(nSeg);
+      for(let i=0;i<n;i++){
+        if(cfg.excludeNoData && raw.invalid[i]) continue;
+        const zi=useSeg?baseArr[segOfAll[i]]:cfg.zero[a];
+        const v=(arr[i]-zi)/s;
+        w[segOfAll[i]] += v*Math.abs(v); // 大きい振れを重視して主方向を判定
+      }
+      for(let g=0;g<nSeg;g++) sign[g]= w[g]<0 ? -1 : 1;
+    }
+    flipSign[a]=sign;
+  });
 }
 
 // 力の「動き(変動量)」を 0.2s ビンごとに算出し、±2sのrolling maxで包絡。
@@ -516,10 +538,7 @@ function updateSegZero(){
   for(let i=0;i<n;i++){ if(ptpSample[i]>actThr) lastAct=ts[i]; if(ts[i]-lastAct<=PAD) nearBlock[i]=1; }
   let nextAct=1e9;
   for(let i=n-1;i>=0;i--){ if(ptpSample[i]>actThr) nextAct=ts[i]; if(nextAct-ts[i]<=PAD) nearBlock[i]=1; }
-  const bounds=parseBounds();
-  const segOf=new Int16Array(n); const nSeg=bounds.length+1;
-  let si=0;
-  for(let i=0;i<n;i++){ while(si<bounds.length && ts[i]>=bounds[si]) si++; segOf[i]=si; }
+  const segOf=segOfAll; const nSeg=parseBounds().length+1;
   const sums={}, cnts=new Float64Array(nSeg);
   AXES.forEach(a=>sums[a]=new Float64Array(nSeg));
   for(let i=0;i<n;i++){
@@ -545,15 +564,15 @@ function seriesValues(a){
     return out;
   }
   const z=cfg.zero[a], s=cfg.sens[a]||1;
-  const flip = (cfg.flipEnable && flipSeg && cfg.flipAxes[a]);
   const useSeg = (cfg.perSegZero && segZero);  // 工程ごとの零点を優先
   const baseArr = useSeg ? segZero.base[a] : null;
-  const segOf = useSeg ? segZero.segOf : null;
+  const signArr = (cfg.flipEnable && flipSign && cfg.flipAxes[a]) ? flipSign[a] : null;
   for(let i=0;i<arr.length;i++){
     if((ex&&inv[i])||(hide&&hide[i])){ out[i]=null; continue; }
-    const zi = useSeg ? baseArr[segOf[i]] : z;  // まず工程ごとの基準を引く
+    const sg = segOfAll ? segOfAll[i] : 0;
+    const zi = useSeg ? baseArr[sg] : z;          // まず工程ごとの基準を引く
     let v=(arr[i]-zi)/s;
-    if(flip && flipSeg[i]) v=-v;                 // その後で向きを反転
+    if(signArr) v *= signArr[sg];                 // その工程で＋向きになるよう揃える
     out[i]=v;
   }
   return out;
@@ -614,8 +633,9 @@ function applyYSpec(axObj, spec){
 function draw(){
   if(!raw) return;
   uiToCfg();
-  updateFlipSeg();
+  updateSegOf();
   updateSegZero();
+  updateFlipSign();
   updateHideMask();
   const tsec=timeInSeconds();
   const stride=strideFor(tsec.length);
@@ -706,8 +726,9 @@ function validBounds(){
 }
 // which: "force" | "moment" | "both" 。svgVector時はベクタ化のためSVGレンダラに。
 function buildGroupFigure(which, svgVector){
-  updateFlipSeg();
+  updateSegOf();
   updateSegZero();
+  updateFlipSign();
   updateHideMask();
   const isLsb=cfg.unitMode==="lsb";
   const tsec=timeInSeconds();
