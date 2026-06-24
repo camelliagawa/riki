@@ -74,6 +74,10 @@
             <option value="lsb">LSB（生値）</option>
           </select>
         </div>
+        <div class="row">
+          <label><input type="checkbox" id="excludeNoData" checked/> 無効データ（0 LSB）を除外</label>
+        </div>
+        <div class="hint" id="noDataInfo"></div>
         <fieldset>
           <legend>零点出力 [LSB]</legend>
           <div class="row">
@@ -209,7 +213,7 @@ const cfg = defaultCfg();
 
 function defaultCfg(){
   const c = {
-    unitMode:"phys", timeUnit:"ms",
+    unitMode:"phys", timeUnit:"ms", excludeNoData:true,
     zero:{}, sens:{}, colors:{}, visible:{},
     lineWidth:1.4, maxPoints:40000, renderer:"scattergl",
     xAuto:true,xMin:0,xMax:60, fAuto:true,fMin:-30,fMax:30, mAuto:true,mMin:-5,mMax:5,
@@ -247,7 +251,7 @@ function buildDynamicRows(){
 function cfgToUI(){
   const v=(id,val)=>{const e=document.getElementById(id); if(e) e.value=val;};
   const chk=(id,val)=>{const e=document.getElementById(id); if(e) e.checked=val;};
-  v("unitMode",cfg.unitMode); v("timeUnit",cfg.timeUnit);
+  v("unitMode",cfg.unitMode); v("timeUnit",cfg.timeUnit); chk("excludeNoData",cfg.excludeNoData);
   v("lineWidth",cfg.lineWidth); v("maxPoints",cfg.maxPoints); v("renderer",cfg.renderer);
   chk("xAuto",cfg.xAuto); v("xMin",cfg.xMin); v("xMax",cfg.xMax);
   chk("fAuto",cfg.fAuto); v("fMin",cfg.fMin); v("fMax",cfg.fMax);
@@ -264,7 +268,7 @@ function uiToCfg(){
   const num=id=>parseFloat(document.getElementById(id).value);
   const str=id=>document.getElementById(id).value;
   const chk=id=>document.getElementById(id).checked;
-  cfg.unitMode=str("unitMode"); cfg.timeUnit=str("timeUnit");
+  cfg.unitMode=str("unitMode"); cfg.timeUnit=str("timeUnit"); cfg.excludeNoData=chk("excludeNoData");
   cfg.lineWidth=num("lineWidth"); cfg.maxPoints=Math.max(1000,num("maxPoints")||40000); cfg.renderer=str("renderer");
   cfg.xAuto=chk("xAuto"); cfg.xMin=num("xMin"); cfg.xMax=num("xMax");
   cfg.fAuto=chk("fAuto"); cfg.fMin=num("fMin"); cfg.fMax=num("fMax");
@@ -282,6 +286,7 @@ function uiToCfg(){
 // ===== CSV 解析 =============================================================
 function parseCSV(text){
   const t=[]; const lsb={}; AXES.forEach(a=>lsb[a]=[]);
+  const invalid=[]; // 全軸0 LSB = データ未取得（無効）
   const lines=text.split(/\r?\n/);
   let bad=0;
   for(let i=0;i<lines.length;i++){
@@ -300,8 +305,9 @@ function parseCSV(text){
     if(!ok){ bad++; continue; }
     t.push(time);
     for(let k=0;k<6;k++) lsb[AXES[k]].push(vals[k]);
+    invalid.push(vals[0]===0&&vals[1]===0&&vals[2]===0&&vals[3]===0&&vals[4]===0&&vals[5]===0);
   }
-  return {t, lsb, bad};
+  return {t, lsb, invalid, bad};
 }
 
 // 時間配列を秒へ
@@ -321,10 +327,14 @@ function guessTimeUnit(t){
 // ===== 値の換算 =============================================================
 function seriesValues(a){
   const arr=raw.lsb[a];
-  if(cfg.unitMode==="lsb") return arr;
-  const z=cfg.zero[a], s=cfg.sens[a]||1;
+  const inv=raw.invalid, ex=cfg.excludeNoData;
   const out=new Array(arr.length);
-  for(let i=0;i<arr.length;i++) out[i]=(arr[i]-z)/s;
+  if(cfg.unitMode==="lsb"){
+    for(let i=0;i<arr.length;i++) out[i]=(ex&&inv[i])?null:arr[i];
+    return out;
+  }
+  const z=cfg.zero[a], s=cfg.sens[a]||1;
+  for(let i=0;i<arr.length;i++) out[i]=(ex&&inv[i])?null:(arr[i]-z)/s;
   return out;
 }
 
@@ -349,6 +359,19 @@ function draw(){
   document.getElementById("dsInfo").textContent =
     stride>1 ? `間引き 1/${stride}（${tsec.length}→約${Math.ceil(tsec.length/stride)}点）` : "全点表示";
 
+  // 無効データ（0 LSB）の集計と、横軸の有効範囲
+  let nInvalid=0, loIdx=-1, hiIdx=-1;
+  for(let i=0;i<raw.invalid.length;i++){
+    if(raw.invalid[i]){ nInvalid++; }
+    else { if(loIdx<0) loIdx=i; hiIdx=i; }
+  }
+  const niEl=document.getElementById("noDataInfo");
+  if(nInvalid>0){
+    niEl.textContent = cfg.excludeNoData
+      ? `無効データ ${nInvalid.toLocaleString()}点 を除外中（有効 ${(tsec[hiIdx]??0).toFixed(1)}s まで）`
+      : `無効データ ${nInvalid.toLocaleString()}点 を含みます（除外をONにすると無視します）`;
+  } else { niEl.textContent = ""; }
+
   const isLsb = cfg.unitMode==="lsb";
   const traces=[];
   AXES.forEach(a=>{
@@ -370,7 +393,12 @@ function draw(){
     linecolor:"#888", mirror:true, ticks:"outside", tickfont:{size:F-2},
     titlefont:{size:F},
   };
-  const xrange = cfg.xAuto ? undefined : [cfg.xMin,cfg.xMax];
+  // 横軸: 手動指定が最優先。自動かつ無効除外時は有効データ範囲にフィット
+  let xrange = cfg.xAuto ? undefined : [cfg.xMin,cfg.xMax];
+  let xAutorange = cfg.xAuto;
+  if(cfg.xAuto && cfg.excludeNoData && loIdx>=0 && nInvalid>0){
+    xrange=[tsec[loIdx], tsec[hiIdx]]; xAutorange=false;
+  }
   const layout={
     margin:{l:70,r:20,t:cfg.titleText?40:14,b:50},
     showlegend:cfg.legendOn,
@@ -378,7 +406,7 @@ function draw(){
     title: cfg.titleText ? {text:cfg.titleText, font:{size:F+2}} : undefined,
     xaxis:Object.assign({}, axBase, {
       domain:[0,1], anchor:"y2", title:{text:cfg.xLabel,font:{size:F}},
-      range:xrange, autorange:cfg.xAuto?true:false,
+      range:xrange, autorange:xAutorange,
     }),
     yaxis:Object.assign({}, axBase, {
       domain:[0.56,1.0], title:{text: isLsb?"Force (LSB)":cfg.fLabel,font:{size:F}},
@@ -479,7 +507,7 @@ function wire(){
   });
 
   // 値変更で再描画（CSV読込後のみ）
-  const ids=["unitMode","timeUnit","lineWidth","maxPoints","renderer",
+  const ids=["unitMode","timeUnit","excludeNoData","lineWidth","maxPoints","renderer",
     "xAuto","xMin","xMax","fAuto","fMin","fMax","mAuto","mMin","mMax",
     "titleText","xLabel","fLabel","mLabel","fontSize","gridOn","legendOn"];
   ids.forEach(id=>{ const e=document.getElementById(id); if(e) e.addEventListener("change",()=>{ if(raw) draw(); }); });
