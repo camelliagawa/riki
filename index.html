@@ -47,6 +47,14 @@
   .grp{display:flex;gap:6px;align-items:center;}
   fieldset{border:1px solid var(--border);border-radius:6px;padding:6px 8px;margin:6px 0;}
   legend{font-size:11.5px;color:var(--muted);padding:0 4px;}
+  .guide{border:1px solid #b9c8e6;background:#eef4ff;border-radius:8px;padding:9px 11px;margin-bottom:12px;}
+  .guide-head{font-weight:700;font-size:13px;margin-bottom:6px;}
+  .guide-steps{list-style:none;margin:0 0 8px;padding:0;}
+  .guide-steps li{display:flex;align-items:center;gap:7px;padding:2px 0;font-size:12.5px;}
+  .gst{width:15px;text-align:center;color:#aab;}
+  .gst.on{color:#1a8a3a;font-weight:700;}
+  .glabel{flex:1;}
+  .gbtn{font-size:11px;padding:2px 9px;white-space:nowrap;}
   #flipGrid{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:4px;}
   .flipchk{font-size:12px;display:inline-flex;align-items:center;gap:3px;}
   #status{font-size:11.5px;color:var(--muted);padding:4px 12px;border-top:1px solid var(--border);background:var(--panel);}
@@ -66,6 +74,18 @@
 
 <main>
   <aside id="sidebar">
+    <div id="guide" class="guide">
+      <div class="guide-head">★ おすすめ整形ガイド</div>
+      <ol class="guide-steps">
+        <li><span class="gst" id="gst1">○</span><span class="glabel">① 無効データ(0 LSB)を除外</span><button class="gbtn" id="gstep1">実行</button></li>
+        <li><span class="gst" id="gst2">○</span><span class="glabel">② 工程ごとに自動ゼロ</span><button class="gbtn" id="gstep2">実行</button></li>
+        <li><span class="gst" id="gst3">○</span><span class="glabel">③ 向きを反転(工程ごと)</span><button class="gbtn" id="gstep3">実行</button></li>
+        <li><span class="gst" id="gst4">○</span><span class="glabel">④ 反転中の区間を非表示</span><button class="gbtn" id="gstep4">実行</button></li>
+        <li><span class="gst" id="gst5">○</span><span class="glabel">⑤ ゼロ中心で表示</span><button class="gbtn" id="gstep5">実行</button></li>
+      </ol>
+      <button class="primary" id="gapply" style="width:100%">①〜⑤をまとめて実行</button>
+      <div class="hint">各行「実行」で個別に、または一括適用。✓ はその整形が現在有効な状態です。境界が検出できない場合は「向き補正」の反転境界[s]を手入力してください。</div>
+    </div>
     <details open>
       <summary>① 単位・換算</summary>
       <div class="body">
@@ -673,6 +693,7 @@ function draw(){
     modeBarButtonsToRemove:["lasso2d","select2d"],
     toImageButtonOptions:{format:"png", filename:"force_torque", scale:2}};
   Plotly.react("plot", traces, layout, config);
+  updateGuideStatus();
 }
 
 // ===== 画像出力（力／モーメントを別々に） ===================================
@@ -788,6 +809,49 @@ function loadFile(file){
 }
 function setStatus(s){ document.getElementById("status").textContent=s; }
 
+// ===== おすすめ整形ガイド ===================================================
+function ensureBoundsUI(){
+  const cur=(document.getElementById("flipBounds").value||"").split(",").map(s=>parseFloat(s)).filter(v=>!isNaN(v));
+  if(cur.length>0) return true;
+  uiToCfg();
+  const b=detectBoundaries();
+  if(b.length===0) return false;
+  document.getElementById("flipBounds").value=b.join(", ");
+  return true;
+}
+function gStep(n){
+  if(!raw){ setStatus("先にCSVを読み込んでください。"); return; }
+  if(n===1){ document.getElementById("excludeNoData").checked=true; }
+  if(n===2){ if(!ensureBoundsUI()) setStatus("境界を検出できません。反転境界[s]を手入力してください。"); document.getElementById("perSegZero").checked=true; }
+  if(n===3){ if(!ensureBoundsUI()){ setStatus("境界を検出できません。反転境界[s]を手入力してください。"); return; } document.getElementById("flipEnable").checked=true; }
+  if(n===4){ if(!(parseFloat(document.getElementById("boundaryHide").value)>0)) document.getElementById("boundaryHide").value="2"; }
+  if(n===5){ document.getElementById("zeroBaseline").value="center"; }
+  draw();
+}
+function applyRecommended(){
+  if(!raw){ setStatus("先にCSVを読み込んでください。"); return; }
+  document.getElementById("excludeNoData").checked=true;
+  const ok=ensureBoundsUI();
+  if(ok){
+    document.getElementById("flipEnable").checked=true;
+    document.getElementById("perSegZero").checked=true;
+    if(!(parseFloat(document.getElementById("boundaryHide").value)>0)) document.getElementById("boundaryHide").value="2";
+  }
+  document.getElementById("zeroBaseline").value="center";
+  draw();
+  setStatus(ok ? `おすすめ整形を適用しました（境界 ${document.getElementById("flipBounds").value} s）`
+              : "境界を検出できず一部のみ適用しました。反転境界[s]を手入力してください。");
+}
+function updateGuideStatus(){
+  const set=(id,on)=>{ const e=document.getElementById(id); if(!e) return;
+    e.textContent=on?"✓":"○"; e.classList.toggle("on",on); };
+  set("gst1",cfg.excludeNoData);
+  set("gst2",cfg.perSegZero);
+  set("gst3",cfg.flipEnable && parseBounds().length>0);
+  set("gst4",(cfg.boundaryHide>0)||parseHideRanges().length>0);
+  set("gst5",cfg.zeroBaseline!=="auto");
+}
+
 // ===== 自動ゼロ =============================================================
 function autoZero(){
   if(!raw){ setStatus("先にCSVを読み込んでください。"); return; }
@@ -870,6 +934,8 @@ function wire(){
     if(raw) draw();
   });
   document.getElementById("autoZeroBtn").addEventListener("click",autoZero);
+  for(let n=1;n<=5;n++) document.getElementById(`gstep${n}`).addEventListener("click",()=>gStep(n));
+  document.getElementById("gapply").addEventListener("click",applyRecommended);
   document.getElementById("forceImgBtn").addEventListener("click",()=>exportImage("force"));
   document.getElementById("momentImgBtn").addEventListener("click",()=>exportImage("moment"));
   document.getElementById("bothImgBtn").addEventListener("click",()=>exportImage("both"));
@@ -882,6 +948,7 @@ buildDynamicRows();
 loadCfgFromStorage();
 cfgToUI();
 wire();
+updateGuideStatus();
 setStatus("CSVをドラッグ＆ドロップしてください。");
 </script>
 </body>
