@@ -148,6 +148,8 @@
           <div class="row"><button id="flipAutoBtn">境界を自動検出</button></div>
           <div class="hint">境界より後ろの工程の符号を反転します（境界が複数なら交互に反転）。下の軸が反転対象です。</div>
           <div id="flipGrid"></div>
+          <div class="row" style="margin-top:8px"><label><input type="checkbox" id="perSegZero"/> 各工程の基準を自動で0に</label></div>
+          <div class="hint">上の境界で区切った工程ごとに、無負荷区間から零点を取り直します（工程間で零点がドリフトする場合に有効）。ONの間は①の零点欄より優先されます。</div>
         </fieldset>
       </div>
     </details>
@@ -248,7 +250,7 @@ function defaultCfg(){
     xAuto:true,xMin:0,xMax:60, fAuto:true,fMin:-30,fMax:30, mAuto:true,mMin:-5,mMax:5,
     titleText:"", xLabel:"time (s)", fLabel:"Force (N)", mLabel:"Moments (Nm)",
     fontSize:14, gridOn:true, legendOn:true,
-    flipEnable:false, flipBounds:"", flipAxes:{},
+    flipEnable:false, flipBounds:"", flipAxes:{}, perSegZero:false,
   };
   AXES.forEach(a=>{ c.zero[a]=DEFAULT_ZERO; c.sens[a]=DEFAULT_SENS[a]; c.colors[a]=DEFAULT_COLORS[a]; c.visible[a]=true; c.flipAxes[a]=IS_MOMENT(a)?(a!=="My"):(a==="Fy"); });
   return c;
@@ -294,7 +296,7 @@ function cfgToUI(){
   chk("mAuto",cfg.mAuto); v("mMin",cfg.mMin); v("mMax",cfg.mMax);
   v("titleText",cfg.titleText); v("xLabel",cfg.xLabel); v("fLabel",cfg.fLabel); v("mLabel",cfg.mLabel);
   v("fontSize",cfg.fontSize); chk("gridOn",cfg.gridOn); chk("legendOn",cfg.legendOn);
-  chk("flipEnable",cfg.flipEnable); v("flipBounds",cfg.flipBounds);
+  chk("flipEnable",cfg.flipEnable); v("flipBounds",cfg.flipBounds); chk("perSegZero",cfg.perSegZero);
   AXES.forEach(a=>{
     v(`sens_${a}`,cfg.sens[a]); v(`zero_${a}`,cfg.zero[a]);
     v(`col_${a}`,cfg.colors[a]); v(`colt_${a}`,cfg.colors[a]); chk(`vis_${a}`,cfg.visible[a]);
@@ -313,7 +315,7 @@ function uiToCfg(){
   cfg.mAuto=chk("mAuto"); cfg.mMin=num("mMin"); cfg.mMax=num("mMax");
   cfg.titleText=str("titleText"); cfg.xLabel=str("xLabel"); cfg.fLabel=str("fLabel"); cfg.mLabel=str("mLabel");
   cfg.fontSize=num("fontSize"); cfg.gridOn=chk("gridOn"); cfg.legendOn=chk("legendOn");
-  cfg.flipEnable=chk("flipEnable"); cfg.flipBounds=str("flipBounds");
+  cfg.flipEnable=chk("flipEnable"); cfg.flipBounds=str("flipBounds"); cfg.perSegZero=chk("perSegZero");
   AXES.forEach(a=>{
     cfg.sens[a]=num(`sens_${a}`)||DEFAULT_SENS[a];
     cfg.zero[a]=num(`zero_${a}`); if(isNaN(cfg.zero[a])) cfg.zero[a]=DEFAULT_ZERO;
@@ -382,58 +384,102 @@ function updateFlipSeg(){
   }
 }
 
-// 工程の境界を自動検出。
-// 「力の絶対値」ではなく「力の動き(変動量)」で活動区間を判定するので、
-// 零点(オフセット)が未補正でも休止区間を正しく見分けられる。
-function detectBoundaries(){
-  if(!raw) return [];
+// 力の「動き(変動量)」を 0.2s ビンごとに算出し、±2sのrolling maxで包絡。
+// 絶対値ではなく動きで見るので零点(オフセット)未補正でも休止を見分けられる。
+// 返り値: env=サンプル毎の活動量, peak, ts
+function activityPerSample(){
   const ts=timeInSeconds(), n=ts.length;
   const fx=raw.lsb.Fx, fy=raw.lsb.Fy, fz=raw.lsb.Fz;
   const sx=cfg.sens.Fx||1, sy=cfg.sens.Fy||1, sz=cfg.sens.Fz||1;
   const zx=cfg.zero.Fx, zy=cfg.zero.Fy, zz=cfg.zero.Fz;
-  // 0.2sビンごとの peak-to-peak（動きの量・オフセット非依存）
-  const binW=0.2, tc=[], ptp=[];
-  let i=0;
+  const binW=0.2, tc=[], ptp=[]; const binOf=new Int32Array(n);
+  let i=0, b=0;
   while(i<n){
     const t0=ts[i]; let j=i, valid=false;
     let mnx=Infinity,mxx=-Infinity,mny=Infinity,mxy=-Infinity,mnz=Infinity,mxz=-Infinity;
     while(j<n && ts[j]<t0+binW){
+      binOf[j]=b;
       if(!(cfg.excludeNoData && raw.invalid[j])){
         valid=true;
-        const a=(fx[j]-zx)/sx, b=(fy[j]-zy)/sy, c=(fz[j]-zz)/sz;
+        const a=(fx[j]-zx)/sx, bb=(fy[j]-zy)/sy, c=(fz[j]-zz)/sz;
         if(a<mnx)mnx=a; if(a>mxx)mxx=a;
-        if(b<mny)mny=b; if(b>mxy)mxy=b;
+        if(bb<mny)mny=bb; if(bb>mxy)mxy=bb;
         if(c<mnz)mnz=c; if(c>mxz)mxz=c;
       }
       j++;
     }
     tc.push((t0+ts[j-1])/2);
     ptp.push(valid ? (mxx-mnx)+(mxy-mny)+(mxz-mnz) : 0);
-    i=j;
+    i=j; b++;
   }
-  const B=tc.length; if(B===0) return [];
-  let peak=0; for(const v of ptp) if(v>peak)peak=v;
-  const thr=Math.max(2, peak*0.15);
-  // ±2sのrolling maxで一時的な谷を埋める（工程内の振幅減衰で切れないように）
-  const HW=2.0, env=new Array(B);
+  const B=ptp.length; let peak=0; for(const v of ptp) if(v>peak)peak=v;
+  const HW=2.0, envB=new Array(B);
   for(let k=0;k<B;k++){
     let m=0;
     for(let a=k; a>=0 && tc[a]>=tc[k]-HW; a--) if(ptp[a]>m)m=ptp[a];
     for(let a=k+1; a<B && tc[a]<=tc[k]+HW; a++) if(ptp[a]>m)m=ptp[a];
-    env[k]=m;
+    envB[k]=m;
   }
-  const runs=[]; let k=0;
-  while(k<B){
-    if(env[k]>thr){ let m=k; while(m<B && env[m]>thr) m++; runs.push([tc[k],tc[m-1]]); k=m; }
-    else k++;
+  // env = ±2s包絡（境界検出用）, ptpSample = ビン素の動き（無負荷判定用）
+  const env=new Float32Array(n), ptpSample=new Float32Array(n);
+  for(let k=0;k<n;k++){ env[k]=envB[binOf[k]]; ptpSample[k]=ptp[binOf[k]]; }
+  return {ts, env, ptpSample, peak};
+}
+
+// 活動ブロック（操作している連続区間）を検出
+function detectBlocks(act){
+  const {ts, env, peak}= act || activityPerSample(); const n=ts.length;
+  const thr=Math.max(2, peak*0.15);
+  const runs=[]; let i=0;
+  while(i<n){
+    if(env[i]>thr){ let j=i; while(j<n && env[j]>thr) j++; runs.push([ts[i],ts[j-1]]); i=j; }
+    else i++;
   }
   const minGap=1.5, minActive=1.0, merged=[];
   for(const r of runs){ const last=merged[merged.length-1];
     if(last && r[0]-last[1]<minGap) last[1]=r[1]; else merged.push([r[0],r[1]]); }
-  const blocks=merged.filter(r=>r[1]-r[0]>=minActive);
+  return merged.filter(r=>r[1]-r[0]>=minActive);
+}
+// 工程の境界を自動検出（活動ブロックの切れ目の中点）
+function detectBoundaries(){
+  if(!raw) return [];
+  const blocks=detectBlocks();
   const bounds=[];
   for(let q=1;q<blocks.length;q++) bounds.push(Math.round((blocks[q-1][1]+blocks[q][0])/2*10)/10);
   return bounds;
+}
+
+// 工程ごとの自動ゼロ: 境界で区切り、各工程の「活動ブロック近傍の無負荷区間」から零点を算出。
+// 工程間の長い休止(ドリフト遷移区間)は除外し、各工程の真の零点を取る。
+let segZero=null; // {segOf:Int16Array, base:{axis:Float64Array}} or null
+function updateSegZero(){
+  if(!raw || !cfg.perSegZero){ segZero=null; return; }
+  const act=activityPerSample(); const {ts, ptpSample, peak}=act; const n=ts.length;
+  const quietThr=Math.max(1.5, peak*0.10);
+  const actThr=Math.max(2, peak*0.15);
+  // 「操作している瞬間(=ストローク)」±PAD のみを零点採取対象にし、工程間の長い
+  // 休止(ドリフト遷移)を除外する。これで各工程の真の零点だけを拾える。
+  const PAD=1.0, nearBlock=new Uint8Array(n);
+  let lastAct=-1e9;
+  for(let i=0;i<n;i++){ if(ptpSample[i]>actThr) lastAct=ts[i]; if(ts[i]-lastAct<=PAD) nearBlock[i]=1; }
+  let nextAct=1e9;
+  for(let i=n-1;i>=0;i--){ if(ptpSample[i]>actThr) nextAct=ts[i]; if(nextAct-ts[i]<=PAD) nearBlock[i]=1; }
+  const bounds=parseBounds();
+  const segOf=new Int16Array(n); const nSeg=bounds.length+1;
+  let si=0;
+  for(let i=0;i<n;i++){ while(si<bounds.length && ts[i]>=bounds[si]) si++; segOf[i]=si; }
+  const sums={}, cnts=new Float64Array(nSeg);
+  AXES.forEach(a=>sums[a]=new Float64Array(nSeg));
+  for(let i=0;i<n;i++){
+    if(cfg.excludeNoData && raw.invalid[i]) continue;
+    if(ptpSample[i]>quietThr) continue;   // 無負荷(動きの少ない)サンプルのみ
+    if(!nearBlock[i]) continue;           // 工程の近傍のみ（ドリフト区間を除外）
+    const s=segOf[i]; cnts[s]++;
+    for(const a of AXES) sums[a][s]+=raw.lsb[a][i];
+  }
+  const base={}; AXES.forEach(a=>base[a]=new Float64Array(nSeg));
+  for(let s=0;s<nSeg;s++) for(const a of AXES) base[a][s]= cnts[s]>0 ? sums[a][s]/cnts[s] : cfg.zero[a];
+  segZero={segOf, base};
 }
 
 // ===== 値の換算 =============================================================
@@ -447,10 +493,14 @@ function seriesValues(a){
   }
   const z=cfg.zero[a], s=cfg.sens[a]||1;
   const flip = (cfg.flipEnable && flipSeg && cfg.flipAxes[a]);
+  const useSeg = (cfg.perSegZero && segZero);  // 工程ごとの零点を優先
+  const baseArr = useSeg ? segZero.base[a] : null;
+  const segOf = useSeg ? segZero.segOf : null;
   for(let i=0;i<arr.length;i++){
     if(ex&&inv[i]){ out[i]=null; continue; }
-    let v=(arr[i]-z)/s;
-    if(flip && flipSeg[i]) v=-v;
+    const zi = useSeg ? baseArr[segOf[i]] : z;  // まず工程ごとの基準を引く
+    let v=(arr[i]-zi)/s;
+    if(flip && flipSeg[i]) v=-v;                 // その後で向きを反転
     out[i]=v;
   }
   return out;
@@ -512,6 +562,7 @@ function draw(){
   if(!raw) return;
   uiToCfg();
   updateFlipSeg();
+  updateSegZero();
   const tsec=timeInSeconds();
   const stride=strideFor(tsec.length);
   document.getElementById("dsInfo").textContent =
@@ -601,6 +652,7 @@ function validBounds(){
 // which: "force" | "moment" | "both" 。svgVector時はベクタ化のためSVGレンダラに。
 function buildGroupFigure(which, svgVector){
   updateFlipSeg();
+  updateSegZero();
   const isLsb=cfg.unitMode==="lsb";
   const tsec=timeInSeconds();
   const stride=strideFor(tsec.length);
@@ -759,7 +811,7 @@ function wire(){
   const ids=["unitMode","timeUnit","excludeNoData","zeroBaseline","lineWidth","maxPoints","renderer",
     "xAuto","xMin","xMax","fAuto","fMin","fMax","mAuto","mMin","mMax",
     "titleText","xLabel","fLabel","mLabel","fontSize","gridOn","legendOn",
-    "flipEnable","flipBounds"];
+    "flipEnable","flipBounds","perSegZero"];
   ids.forEach(id=>{ const e=document.getElementById(id); if(e) e.addEventListener("change",()=>{ if(raw) draw(); }); });
   AXES.forEach(a=>{
     document.getElementById(`vis_${a}`).addEventListener("change",()=>{ if(raw) draw(); });
