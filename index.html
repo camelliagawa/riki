@@ -150,6 +150,9 @@
           <div id="flipGrid"></div>
           <div class="row" style="margin-top:8px"><label><input type="checkbox" id="perSegZero"/> 各工程の基準を自動で0に</label></div>
           <div class="hint">上の境界で区切った工程ごとに、無負荷区間から零点を取り直します（工程間で零点がドリフトする場合に有効）。ONの間は①の零点欄より優先されます。</div>
+          <div class="row" style="margin-top:8px"><label>反転境界の前後を除外 [s]</label><input type="number" id="boundaryHide" step="0.5" min="0" value="0"/></div>
+          <div class="row"><label>非表示区間 [s]</label><input type="text" id="hideRanges" class="wide" placeholder="例: 30-35, 50-52"/></div>
+          <div class="hint">反転中の不要データを隠します。反転境界の前後 [s]、または「開始-終了」の区間（カンマ区切りで複数可）をグラフから非表示にします。</div>
         </fieldset>
       </div>
     </details>
@@ -251,6 +254,7 @@ function defaultCfg(){
     titleText:"", xLabel:"time (s)", fLabel:"Force (N)", mLabel:"Moments (Nm)",
     fontSize:14, gridOn:true, legendOn:true,
     flipEnable:false, flipBounds:"", flipAxes:{}, perSegZero:false,
+    boundaryHide:0, hideRanges:"",
   };
   AXES.forEach(a=>{ c.zero[a]=DEFAULT_ZERO; c.sens[a]=DEFAULT_SENS[a]; c.colors[a]=DEFAULT_COLORS[a]; c.visible[a]=true; c.flipAxes[a]=IS_MOMENT(a)?(a!=="My"):(a==="Fy"); });
   return c;
@@ -297,6 +301,7 @@ function cfgToUI(){
   v("titleText",cfg.titleText); v("xLabel",cfg.xLabel); v("fLabel",cfg.fLabel); v("mLabel",cfg.mLabel);
   v("fontSize",cfg.fontSize); chk("gridOn",cfg.gridOn); chk("legendOn",cfg.legendOn);
   chk("flipEnable",cfg.flipEnable); v("flipBounds",cfg.flipBounds); chk("perSegZero",cfg.perSegZero);
+  v("boundaryHide",cfg.boundaryHide); v("hideRanges",cfg.hideRanges);
   AXES.forEach(a=>{
     v(`sens_${a}`,cfg.sens[a]); v(`zero_${a}`,cfg.zero[a]);
     v(`col_${a}`,cfg.colors[a]); v(`colt_${a}`,cfg.colors[a]); chk(`vis_${a}`,cfg.visible[a]);
@@ -316,6 +321,7 @@ function uiToCfg(){
   cfg.titleText=str("titleText"); cfg.xLabel=str("xLabel"); cfg.fLabel=str("fLabel"); cfg.mLabel=str("mLabel");
   cfg.fontSize=num("fontSize"); cfg.gridOn=chk("gridOn"); cfg.legendOn=chk("legendOn");
   cfg.flipEnable=chk("flipEnable"); cfg.flipBounds=str("flipBounds"); cfg.perSegZero=chk("perSegZero");
+  cfg.boundaryHide=num("boundaryHide")||0; cfg.hideRanges=str("hideRanges");
   AXES.forEach(a=>{
     cfg.sens[a]=num(`sens_${a}`)||DEFAULT_SENS[a];
     cfg.zero[a]=num(`zero_${a}`); if(isNaN(cfg.zero[a])) cfg.zero[a]=DEFAULT_ZERO;
@@ -371,6 +377,31 @@ let flipSeg=null; // index毎に true=反転区間。draw/buildGroupFigureの先
 function parseBounds(){
   return (cfg.flipBounds||"").split(",").map(s=>parseFloat(s.trim()))
     .filter(v=>!isNaN(v)).sort((a,b)=>a-b);
+}
+// 非表示区間（反転中の不要データを隠す）
+let hideMask=null; // index毎に 1=非表示
+function parseHideRanges(){
+  return (cfg.hideRanges||"").split(",").map(s=>{
+    const m=s.trim().match(/^(-?\d+\.?\d*)\s*[-~]\s*(-?\d+\.?\d*)$/);
+    if(!m) return null;
+    let a=parseFloat(m[1]), b=parseFloat(m[2]); if(a>b){const t=a;a=b;b=t;}
+    return [a,b];
+  }).filter(Boolean);
+}
+function updateHideMask(){
+  if(!raw){ hideMask=null; return; }
+  const ranges=parseHideRanges();
+  const bh=cfg.boundaryHide||0;
+  const bounds= bh>0 ? parseBounds() : [];
+  if(ranges.length===0 && bounds.length===0){ hideMask=null; return; }
+  const ts=timeInSeconds(), n=ts.length;
+  hideMask=new Uint8Array(n);
+  for(let i=0;i<n;i++){
+    const t=ts[i]; let h=false;
+    for(const r of ranges){ if(t>=r[0] && t<=r[1]){ h=true; break; } }
+    if(!h && bh>0){ for(const b of bounds){ if(Math.abs(t-b)<=bh){ h=true; break; } } }
+    if(h) hideMask[i]=1;
+  }
 }
 function updateFlipSeg(){
   if(!raw || !cfg.flipEnable){ flipSeg=null; return; }
@@ -487,8 +518,9 @@ function seriesValues(a){
   const arr=raw.lsb[a];
   const inv=raw.invalid, ex=cfg.excludeNoData;
   const out=new Array(arr.length);
+  const hide=hideMask;
   if(cfg.unitMode==="lsb"){ // 生値表示時は反転しない
-    for(let i=0;i<arr.length;i++) out[i]=(ex&&inv[i])?null:arr[i];
+    for(let i=0;i<arr.length;i++) out[i]=((ex&&inv[i])||(hide&&hide[i]))?null:arr[i];
     return out;
   }
   const z=cfg.zero[a], s=cfg.sens[a]||1;
@@ -497,7 +529,7 @@ function seriesValues(a){
   const baseArr = useSeg ? segZero.base[a] : null;
   const segOf = useSeg ? segZero.segOf : null;
   for(let i=0;i<arr.length;i++){
-    if(ex&&inv[i]){ out[i]=null; continue; }
+    if((ex&&inv[i])||(hide&&hide[i])){ out[i]=null; continue; }
     const zi = useSeg ? baseArr[segOf[i]] : z;  // まず工程ごとの基準を引く
     let v=(arr[i]-zi)/s;
     if(flip && flipSeg[i]) v=-v;                 // その後で向きを反転
@@ -563,6 +595,7 @@ function draw(){
   uiToCfg();
   updateFlipSeg();
   updateSegZero();
+  updateHideMask();
   const tsec=timeInSeconds();
   const stride=strideFor(tsec.length);
   document.getElementById("dsInfo").textContent =
@@ -653,6 +686,7 @@ function validBounds(){
 function buildGroupFigure(which, svgVector){
   updateFlipSeg();
   updateSegZero();
+  updateHideMask();
   const isLsb=cfg.unitMode==="lsb";
   const tsec=timeInSeconds();
   const stride=strideFor(tsec.length);
@@ -811,7 +845,7 @@ function wire(){
   const ids=["unitMode","timeUnit","excludeNoData","zeroBaseline","lineWidth","maxPoints","renderer",
     "xAuto","xMin","xMax","fAuto","fMin","fMax","mAuto","mMin","mMax",
     "titleText","xLabel","fLabel","mLabel","fontSize","gridOn","legendOn",
-    "flipEnable","flipBounds","perSegZero"];
+    "flipEnable","flipBounds","perSegZero","boundaryHide","hideRanges"];
   ids.forEach(id=>{ const e=document.getElementById(id); if(e) e.addEventListener("change",()=>{ if(raw) draw(); }); });
   AXES.forEach(a=>{
     document.getElementById(`vis_${a}`).addEventListener("change",()=>{ if(raw) draw(); });
