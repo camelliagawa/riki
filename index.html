@@ -35,9 +35,10 @@
   .row label{flex:1;color:var(--text);}
   .row input[type=number],.row input[type=text],.row select{width:90px;padding:3px 5px;border:1px solid var(--border);border-radius:5px;font-size:12.5px;}
   .row input[type=text].wide{width:150px;}
-  .axisrow{display:grid;grid-template-columns:18px 30px 1fr 64px;align-items:center;gap:6px;margin:4px 0;font-size:12.5px;}
-  .axisrow input[type=color]{width:34px;height:22px;padding:0;border:1px solid var(--border);border-radius:4px;background:none;}
+  .axisrow{display:grid;grid-template-columns:18px 30px 18px 1fr;align-items:center;gap:6px;margin:4px 0;font-size:12.5px;}
   .axisrow input[type=number]{width:60px;padding:3px;border:1px solid var(--border);border-radius:5px;}
+  .axisrow .sw{width:16px;height:16px;border:1px solid var(--border);border-radius:3px;}
+  .axisrow select.colorsel{width:100%;padding:3px;border:1px solid var(--border);border-radius:5px;font-size:12px;}
   .hint{font-size:11px;color:var(--muted);margin:4px 0;line-height:1.4;}
   button{padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:#fff;cursor:pointer;font-size:12.5px;}
   button:hover{background:#f0f2f5;}
@@ -184,7 +185,7 @@
       <div class="body">
         <div id="seriesGrid"></div>
         <div class="row"><label>線の太さ</label><input type="number" id="lineWidth" value="1.4" step="0.1" min="0.2"/></div>
-        <div class="hint">色は16進。チェックを外すと非表示。凡例クリックでも表示/非表示できます。</div>
+        <div class="hint">色はパレットから選択（PowerPoint標準色）。チェックを外すと非表示。凡例クリックでも表示/非表示できます。</div>
       </div>
     </details>
 
@@ -257,7 +258,13 @@
 const AXES = ["Fx","Fy","Fz","Mx","My","Mz"];
 const IS_MOMENT = a => a[0]==="M";
 // matplotlib 既定色（完成イメージに合わせる）
-const DEFAULT_COLORS = {Fx:"#1f77b4",Fy:"#ff7f0e",Fz:"#2ca02c",Mx:"#d62728",My:"#9467bd",Mz:"#8c564b"};
+// PowerPoint「標準の色」に準じたパレット（選択肢をこの中に限定）
+const PP_COLORS = [
+  ["濃い赤","#C00000"],["赤","#FF0000"],["オレンジ","#FFC000"],["黄","#FFFF00"],
+  ["薄い緑","#92D050"],["緑","#00B050"],["水色","#00B0F0"],["青","#0070C0"],
+  ["濃い青","#002060"],["紫","#7030A0"],["黒","#000000"],["灰","#808080"]
+];
+const DEFAULT_COLORS = {Fx:"#0070C0",Fy:"#FFC000",Fz:"#00B050",Mx:"#FF0000",My:"#7030A0",Mz:"#C00000"};
 // 出荷特性データ（ZEF-6A100-4-RAD）の主軸感度を初期値に
 const DEFAULT_SENS = {Fx:64.650,Fy:65.010,Fz:65.860,Mx:1630.250,My:1630.250,Mz:1572.000};
 const DEFAULT_ZERO = 8192;
@@ -283,6 +290,23 @@ function defaultCfg(){
 }
 
 // ===== UI 構築（動的な行） ==================================================
+// 背景色に対して読みやすい文字色（白/黒）を返す
+function textOn(hex){
+  const h=hex.replace("#",""); const r=parseInt(h.slice(0,2),16),g=parseInt(h.slice(2,4),16),b=parseInt(h.slice(4,6),16);
+  return (0.299*r+0.587*g+0.114*b) > 150 ? "#000" : "#fff";
+}
+// 色selectに値を反映（パレット外の色なら一時オプションを追加）+ 横のスウォッチ更新
+function setColorUI(a, hex){
+  const sel=document.getElementById(`col_${a}`); if(!sel) return;
+  hex=(hex||"").toUpperCase();
+  const has=Array.from(sel.options).some(o=>o.value.toUpperCase()===hex);
+  if(!has && /^#[0-9A-F]{6}$/.test(hex)){
+    const o=document.createElement("option"); o.value=hex; o.textContent="その他"; o.style.background=hex; o.style.color=textOn(hex);
+    sel.insertBefore(o, sel.firstChild);
+  }
+  sel.value=hex;
+  const sw=document.getElementById(`sw_${a}`); if(sw) sw.style.background=hex;
+}
 function buildDynamicRows(){
   const sg = document.getElementById("sensGrid");
   const zg = document.getElementById("zeroGrid");
@@ -303,10 +327,11 @@ function buildDynamicRows(){
     const r2=document.createElement("div"); r2.className="row";
     r2.innerHTML=`<label>${a}</label><input type="number" step="1" id="zero_${a}">`;
     zg.appendChild(r2);
-    // 系列（色・表示）
+    // 系列（色・表示）— 色はパレットから選択
     const r3=document.createElement("div"); r3.className="axisrow";
+    const opts=PP_COLORS.map(([nm,hex])=>`<option value="${hex}" style="background:${hex};color:${textOn(hex)}">${nm}</option>`).join("");
     r3.innerHTML=`<input type="checkbox" id="vis_${a}"><span>${a}</span>`+
-      `<input type="color" id="col_${a}"><input type="text" id="colt_${a}">`;
+      `<span class="sw" id="sw_${a}"></span><select class="colorsel" id="col_${a}">${opts}</select>`;
     xg.appendChild(r3);
   });
 }
@@ -326,7 +351,7 @@ function cfgToUI(){
   v("boundaryHide",cfg.boundaryHide); v("hideRanges",cfg.hideRanges);
   AXES.forEach(a=>{
     v(`sens_${a}`,cfg.sens[a]); v(`zero_${a}`,cfg.zero[a]);
-    v(`col_${a}`,cfg.colors[a]); v(`colt_${a}`,cfg.colors[a]); chk(`vis_${a}`,cfg.visible[a]);
+    setColorUI(a,cfg.colors[a]); chk(`vis_${a}`,cfg.visible[a]);
     chk(`flip_${a}`,!!cfg.flipAxes[a]);
   });
 }
@@ -347,7 +372,7 @@ function uiToCfg(){
   AXES.forEach(a=>{
     cfg.sens[a]=num(`sens_${a}`)||DEFAULT_SENS[a];
     cfg.zero[a]=num(`zero_${a}`); if(isNaN(cfg.zero[a])) cfg.zero[a]=DEFAULT_ZERO;
-    cfg.colors[a]=document.getElementById(`colt_${a}`).value || DEFAULT_COLORS[a];
+    cfg.colors[a]=document.getElementById(`col_${a}`).value || DEFAULT_COLORS[a];
     cfg.visible[a]=chk(`vis_${a}`);
     cfg.flipAxes[a]=chk(`flip_${a}`);
   });
@@ -933,11 +958,10 @@ function wire(){
   document.getElementById("reloadBtn").addEventListener("click",()=>fi.click());
   fi.addEventListener("change",e=>{ const f=e.target.files[0]; if(f) loadFile(f); fi.value=""; });
 
-  // 色テキスト↔カラーピッカー同期
+  // 色パレット選択
   AXES.forEach(a=>{
-    const c=document.getElementById(`col_${a}`), ct=document.getElementById(`colt_${a}`);
-    c.addEventListener("input",()=>{ ct.value=c.value; draw(); });
-    ct.addEventListener("change",()=>{ if(/^#?[0-9a-fA-F]{6}$/.test(ct.value)){ if(ct.value[0]!=="#")ct.value="#"+ct.value; c.value=ct.value; draw(); }});
+    const c=document.getElementById(`col_${a}`);
+    c.addEventListener("change",()=>{ const sw=document.getElementById(`sw_${a}`); if(sw) sw.style.background=c.value; draw(); });
   });
 
   // 値変更で再描画（CSV読込後のみ）
