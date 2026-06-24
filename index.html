@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>力覚センサ CSV グラフビューア (ZEF / DynPick)</title>
+<script src="vendor/plotly.min.js"></script>
+<style>
+  :root{
+    --bg:#f4f5f7; --panel:#ffffff; --border:#d9dce1; --text:#1f2430;
+    --muted:#6b7280; --accent:#2563eb; --accent-d:#1d4ed8;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;font-family:"Segoe UI","Hiragino Kaku Gothic ProN","Meiryo",sans-serif;color:var(--text);background:var(--bg);}
+  body{display:flex;flex-direction:column;height:100vh;overflow:hidden;}
+  header{display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--border);flex:0 0 auto;}
+  header h1{font-size:16px;margin:0;font-weight:600;}
+  header .sub{font-size:12px;color:var(--muted);}
+  header .spacer{flex:1;}
+  header button{font-size:13px;}
+  main{flex:1;display:flex;min-height:0;}
+  #sidebar{width:330px;flex:0 0 auto;overflow-y:auto;background:var(--panel);border-right:1px solid var(--border);padding:12px;}
+  #plotwrap{flex:1;min-width:0;display:flex;flex-direction:column;}
+  #dropzone{margin:12px;border:2px dashed var(--border);border-radius:10px;flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--muted);text-align:center;cursor:pointer;transition:.15s;}
+  #dropzone.drag{border-color:var(--accent);background:#eff4ff;color:var(--accent-d);}
+  #dropzone .big{font-size:18px;font-weight:600;margin-bottom:6px;color:var(--text);}
+  #plot{flex:1;display:none;}
+  details{border:1px solid var(--border);border-radius:8px;margin-bottom:10px;background:var(--panel);}
+  details>summary{cursor:pointer;padding:8px 10px;font-weight:600;font-size:13px;list-style:none;user-select:none;}
+  details>summary::-webkit-details-marker{display:none;}
+  details>summary::before{content:"▸ ";color:var(--muted);}
+  details[open]>summary::before{content:"▾ ";}
+  .body{padding:6px 10px 10px;}
+  .row{display:flex;align-items:center;gap:6px;margin:5px 0;font-size:12.5px;}
+  .row label{flex:1;color:var(--text);}
+  .row input[type=number],.row input[type=text],.row select{width:90px;padding:3px 5px;border:1px solid var(--border);border-radius:5px;font-size:12.5px;}
+  .row input[type=text].wide{width:150px;}
+  .axisrow{display:grid;grid-template-columns:18px 30px 1fr 64px;align-items:center;gap:6px;margin:4px 0;font-size:12.5px;}
+  .axisrow input[type=color]{width:34px;height:22px;padding:0;border:1px solid var(--border);border-radius:4px;background:none;}
+  .axisrow input[type=number]{width:60px;padding:3px;border:1px solid var(--border);border-radius:5px;}
+  .hint{font-size:11px;color:var(--muted);margin:4px 0;line-height:1.4;}
+  button{padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:#fff;cursor:pointer;font-size:12.5px;}
+  button:hover{background:#f0f2f5;}
+  button.primary{background:var(--accent);color:#fff;border-color:var(--accent);}
+  button.primary:hover{background:var(--accent-d);}
+  .btnrow{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;}
+  .grp{display:flex;gap:6px;align-items:center;}
+  fieldset{border:1px solid var(--border);border-radius:6px;padding:6px 8px;margin:6px 0;}
+  legend{font-size:11.5px;color:var(--muted);padding:0 4px;}
+  #status{font-size:11.5px;color:var(--muted);padding:4px 12px;border-top:1px solid var(--border);background:var(--panel);}
+  .twocol{display:grid;grid-template-columns:1fr 1fr;gap:6px;}
+  .twocol .row{margin:3px 0;}
+  .pill{font-size:11px;padding:1px 6px;border-radius:10px;background:#eef2ff;color:var(--accent-d);}
+</style>
+</head>
+<body>
+<header>
+  <h1>力覚センサ CSV グラフビューア</h1>
+  <span class="sub">ZEF / DynPick 6軸力覚センサ</span>
+  <span class="spacer"></span>
+  <span id="fileinfo" class="sub"></span>
+  <button id="reloadBtn" title="別のCSVを読み込む">CSVを開く</button>
+</header>
+
+<main>
+  <aside id="sidebar">
+    <details open>
+      <summary>① 単位・換算</summary>
+      <div class="body">
+        <div class="row">
+          <label>表示単位</label>
+          <select id="unitMode">
+            <option value="phys">N / Nm（換算）</option>
+            <option value="lsb">LSB（生値）</option>
+          </select>
+        </div>
+        <fieldset>
+          <legend>零点出力 [LSB]</legend>
+          <div class="row">
+            <label>共通ゼロ</label>
+            <input type="number" id="zeroCommon" value="8192" step="1" />
+            <button id="applyZero" title="全軸に適用">適用</button>
+          </div>
+          <div class="twocol" id="zeroGrid"></div>
+          <div class="btnrow">
+            <button id="autoZeroBtn" title="指定区間の平均を各軸の零点にします">区間平均で自動ゼロ</button>
+          </div>
+          <div class="row">
+            <label>自動ゼロ区間 [s]</label>
+            <input type="number" id="autoZeroStart" value="0" step="0.1" style="width:60px"/>
+            <span>〜</span>
+            <input type="number" id="autoZeroEnd" value="2" step="0.1" style="width:60px"/>
+          </div>
+          <div class="hint">取説の零点出力は 8192±655 LSB。無負荷区間がある場合は「自動ゼロ」が正確です。</div>
+        </fieldset>
+        <fieldset>
+          <legend>主軸感度（出荷特性データ）</legend>
+          <div class="twocol" id="sensGrid"></div>
+          <div class="hint">並進力: LSB/N、モーメント: LSB/Nm。荷重 =（検出値−零点）÷感度。</div>
+        </fieldset>
+      </div>
+    </details>
+
+    <details open>
+      <summary>② 軸（時間・縦軸）</summary>
+      <div class="body">
+        <fieldset>
+          <legend>横軸 時間 [s]</legend>
+          <div class="row"><label><input type="checkbox" id="xAuto" checked/> 自動</label></div>
+          <div class="row"><label>最小</label><input type="number" id="xMin" step="1"/></div>
+          <div class="row"><label>最大</label><input type="number" id="xMax" step="1"/></div>
+          <div class="row">
+            <label>時間の単位（CSV）</label>
+            <select id="timeUnit"><option value="ms">ms</option><option value="s">s</option></select>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>力 縦軸</legend>
+          <div class="row"><label><input type="checkbox" id="fAuto" checked/> 自動</label></div>
+          <div class="row"><label>最小</label><input type="number" id="fMin" step="1"/></div>
+          <div class="row"><label>最大</label><input type="number" id="fMax" step="1"/></div>
+        </fieldset>
+        <fieldset>
+          <legend>モーメント 縦軸</legend>
+          <div class="row"><label><input type="checkbox" id="mAuto" checked/> 自動</label></div>
+          <div class="row"><label>最小</label><input type="number" id="mMin" step="0.5"/></div>
+          <div class="row"><label>最大</label><input type="number" id="mMax" step="0.5"/></div>
+        </fieldset>
+      </div>
+    </details>
+
+    <details open>
+      <summary>③ 系列（色・表示）</summary>
+      <div class="body">
+        <div id="seriesGrid"></div>
+        <div class="row"><label>線の太さ</label><input type="number" id="lineWidth" value="1.4" step="0.1" min="0.2"/></div>
+        <div class="hint">色は16進。チェックを外すと非表示。凡例クリックでも表示/非表示できます。</div>
+      </div>
+    </details>
+
+    <details>
+      <summary>④ ラベル・デザイン</summary>
+      <div class="body">
+        <div class="row"><label>グラフ全体タイトル</label></div>
+        <div class="row"><input type="text" id="titleText" class="wide" placeholder="（任意）"/></div>
+        <div class="row"><label>横軸ラベル</label><input type="text" id="xLabel" value="time (s)"/></div>
+        <div class="row"><label>力ラベル</label><input type="text" id="fLabel" value="Force (N)"/></div>
+        <div class="row"><label>モーメントラベル</label><input type="text" id="mLabel" value="Moments (Nm)"/></div>
+        <div class="row"><label>フォントサイズ</label><input type="number" id="fontSize" value="14" step="1" min="6"/></div>
+        <div class="row"><label><input type="checkbox" id="gridOn" checked/> グリッド線</label></div>
+        <div class="row"><label><input type="checkbox" id="legendOn" checked/> 凡例</label></div>
+      </div>
+    </details>
+
+    <details>
+      <summary>⑤ 描画・性能</summary>
+      <div class="body">
+        <div class="row">
+          <label>1系列あたり最大点数</label>
+          <input type="number" id="maxPoints" value="40000" step="1000" min="1000"/>
+        </div>
+        <div class="hint">大きいCSVは間引いて表示すると軽くなります（出力画像も間引き後）。<span id="dsInfo" class="pill"></span></div>
+        <div class="row"><label>レンダラ</label>
+          <select id="renderer"><option value="scattergl">WebGL（高速・推奨）</option><option value="scatter">SVG（高画質）</option></select>
+        </div>
+      </div>
+    </details>
+
+    <div class="btnrow">
+      <button class="primary" id="pngBtn">PNG出力</button>
+      <button id="svgBtn">SVG出力</button>
+    </div>
+    <div class="btnrow">
+      <button id="saveCfg" title="設定をブラウザに保存">設定を保存</button>
+      <button id="resetCfg" title="既定値に戻す">設定リセット</button>
+    </div>
+  </aside>
+
+  <section id="plotwrap">
+    <div id="dropzone">
+      <div class="big">ここに CSV をドラッグ＆ドロップ</div>
+      <div>または クリックしてファイルを選択</div>
+      <div class="hint" style="max-width:420px;margin-top:10px">
+        DPViewer / サンプルプログラムが出力した CSV に対応<br>
+        （列：経過時間, レコード番号, Fx, Fy, Fz, Mx, My, Mz）
+      </div>
+    </div>
+    <div id="plot"></div>
+  </section>
+</main>
+<div id="status">CSV未読込</div>
+<input type="file" id="fileInput" accept=".csv,text/csv" style="display:none" />
+
+<script>
+"use strict";
+// ===== 定数・既定値 =========================================================
+const AXES = ["Fx","Fy","Fz","Mx","My","Mz"];
+const IS_MOMENT = a => a[0]==="M";
+// matplotlib 既定色（完成イメージに合わせる）
+const DEFAULT_COLORS = {Fx:"#1f77b4",Fy:"#ff7f0e",Fz:"#2ca02c",Mx:"#d62728",My:"#9467bd",Mz:"#8c564b"};
+// 出荷特性データ（ZEF-6A100-4-RAD）の主軸感度を初期値に
+const DEFAULT_SENS = {Fx:64.650,Fy:65.010,Fz:65.860,Mx:1630.250,My:1630.250,Mz:1572.000};
+const DEFAULT_ZERO = 8192;
+const CFG_KEY = "zef_csv_viewer_cfg_v1";
+
+// ===== 状態 =================================================================
+let raw = null;     // {t:[s], lsb:{Fx:[],...}}  読み込んだ生データ
+const cfg = defaultCfg();
+
+function defaultCfg(){
+  const c = {
+    unitMode:"phys", timeUnit:"ms",
+    zero:{}, sens:{}, colors:{}, visible:{},
+    lineWidth:1.4, maxPoints:40000, renderer:"scattergl",
+    xAuto:true,xMin:0,xMax:60, fAuto:true,fMin:-30,fMax:30, mAuto:true,mMin:-5,mMax:5,
+    titleText:"", xLabel:"time (s)", fLabel:"Force (N)", mLabel:"Moments (Nm)",
+    fontSize:14, gridOn:true, legendOn:true,
+  };
+  AXES.forEach(a=>{ c.zero[a]=DEFAULT_ZERO; c.sens[a]=DEFAULT_SENS[a]; c.colors[a]=DEFAULT_COLORS[a]; c.visible[a]=true; });
+  return c;
+}
+
+// ===== UI 構築（動的な行） ==================================================
+function buildDynamicRows(){
+  const sg = document.getElementById("sensGrid");
+  const zg = document.getElementById("zeroGrid");
+  const xg = document.getElementById("seriesGrid");
+  sg.innerHTML=""; zg.innerHTML=""; xg.innerHTML="";
+  AXES.forEach(a=>{
+    // 感度
+    const r1=document.createElement("div"); r1.className="row";
+    r1.innerHTML=`<label>${a}</label><input type="number" step="0.001" id="sens_${a}">`;
+    sg.appendChild(r1);
+    // 零点
+    const r2=document.createElement("div"); r2.className="row";
+    r2.innerHTML=`<label>${a}</label><input type="number" step="1" id="zero_${a}">`;
+    zg.appendChild(r2);
+    // 系列（色・表示）
+    const r3=document.createElement("div"); r3.className="axisrow";
+    r3.innerHTML=`<input type="checkbox" id="vis_${a}"><span>${a}</span>`+
+      `<input type="color" id="col_${a}"><input type="text" id="colt_${a}">`;
+    xg.appendChild(r3);
+  });
+}
+
+// cfg -> UI
+function cfgToUI(){
+  const v=(id,val)=>{const e=document.getElementById(id); if(e) e.value=val;};
+  const chk=(id,val)=>{const e=document.getElementById(id); if(e) e.checked=val;};
+  v("unitMode",cfg.unitMode); v("timeUnit",cfg.timeUnit);
+  v("lineWidth",cfg.lineWidth); v("maxPoints",cfg.maxPoints); v("renderer",cfg.renderer);
+  chk("xAuto",cfg.xAuto); v("xMin",cfg.xMin); v("xMax",cfg.xMax);
+  chk("fAuto",cfg.fAuto); v("fMin",cfg.fMin); v("fMax",cfg.fMax);
+  chk("mAuto",cfg.mAuto); v("mMin",cfg.mMin); v("mMax",cfg.mMax);
+  v("titleText",cfg.titleText); v("xLabel",cfg.xLabel); v("fLabel",cfg.fLabel); v("mLabel",cfg.mLabel);
+  v("fontSize",cfg.fontSize); chk("gridOn",cfg.gridOn); chk("legendOn",cfg.legendOn);
+  AXES.forEach(a=>{
+    v(`sens_${a}`,cfg.sens[a]); v(`zero_${a}`,cfg.zero[a]);
+    v(`col_${a}`,cfg.colors[a]); v(`colt_${a}`,cfg.colors[a]); chk(`vis_${a}`,cfg.visible[a]);
+  });
+}
+// UI -> cfg
+function uiToCfg(){
+  const num=id=>parseFloat(document.getElementById(id).value);
+  const str=id=>document.getElementById(id).value;
+  const chk=id=>document.getElementById(id).checked;
+  cfg.unitMode=str("unitMode"); cfg.timeUnit=str("timeUnit");
+  cfg.lineWidth=num("lineWidth"); cfg.maxPoints=Math.max(1000,num("maxPoints")||40000); cfg.renderer=str("renderer");
+  cfg.xAuto=chk("xAuto"); cfg.xMin=num("xMin"); cfg.xMax=num("xMax");
+  cfg.fAuto=chk("fAuto"); cfg.fMin=num("fMin"); cfg.fMax=num("fMax");
+  cfg.mAuto=chk("mAuto"); cfg.mMin=num("mMin"); cfg.mMax=num("mMax");
+  cfg.titleText=str("titleText"); cfg.xLabel=str("xLabel"); cfg.fLabel=str("fLabel"); cfg.mLabel=str("mLabel");
+  cfg.fontSize=num("fontSize"); cfg.gridOn=chk("gridOn"); cfg.legendOn=chk("legendOn");
+  AXES.forEach(a=>{
+    cfg.sens[a]=num(`sens_${a}`)||DEFAULT_SENS[a];
+    cfg.zero[a]=num(`zero_${a}`); if(isNaN(cfg.zero[a])) cfg.zero[a]=DEFAULT_ZERO;
+    cfg.colors[a]=document.getElementById(`colt_${a}`).value || DEFAULT_COLORS[a];
+    cfg.visible[a]=chk(`vis_${a}`);
+  });
+}
+
+// ===== CSV 解析 =============================================================
+function parseCSV(text){
+  const t=[]; const lsb={}; AXES.forEach(a=>lsb[a]=[]);
+  const lines=text.split(/\r?\n/);
+  let bad=0;
+  for(let i=0;i<lines.length;i++){
+    const line=lines[i];
+    if(!line) continue;
+    const p=line.split(",");
+    // 末尾カンマや空欄を除去
+    while(p.length && p[p.length-1].trim()==="") p.pop();
+    if(p.length<8){ bad++; continue; }
+    const time=parseFloat(p[0]);
+    if(isNaN(time)){ bad++; continue; } // ヘッダ行など
+    // 列: 0=時間,1=レコード番号,2..7=Fx..Mz
+    const vals=[];
+    let ok=true;
+    for(let k=0;k<6;k++){ const v=parseInt(p[2+k],10); if(isNaN(v)){ok=false;break;} vals.push(v); }
+    if(!ok){ bad++; continue; }
+    t.push(time);
+    for(let k=0;k<6;k++) lsb[AXES[k]].push(vals[k]);
+  }
+  return {t, lsb, bad};
+}
+
+// 時間配列を秒へ
+function timeInSeconds(){
+  const div = cfg.timeUnit==="ms" ? 1000 : 1;
+  return raw.t.map(v=>v/div);
+}
+
+// 自動で ms/s を推定（最大時間と刻みから）
+function guessTimeUnit(t){
+  if(t.length<2) return "ms";
+  const span=t[t.length-1]-t[0];
+  // 0.5刻みで何万行 → ms とみなすのが妥当。spanが大きい(>300)ならms
+  return span>300 ? "ms" : "s";
+}
+
+// ===== 値の換算 =============================================================
+function seriesValues(a){
+  const arr=raw.lsb[a];
+  if(cfg.unitMode==="lsb") return arr;
+  const z=cfg.zero[a], s=cfg.sens[a]||1;
+  const out=new Array(arr.length);
+  for(let i=0;i<arr.length;i++) out[i]=(arr[i]-z)/s;
+  return out;
+}
+
+// ===== 間引き ===============================================================
+function strideFor(n){
+  const mp=cfg.maxPoints;
+  return n>mp ? Math.ceil(n/mp) : 1;
+}
+function downsample(x,y,stride){
+  if(stride<=1) return {x,y};
+  const xs=[],ys=[];
+  for(let i=0;i<x.length;i+=stride){ xs.push(x[i]); ys.push(y[i]); }
+  return {x:xs,y:ys};
+}
+
+// ===== 描画 =================================================================
+function draw(){
+  if(!raw) return;
+  uiToCfg();
+  const tsec=timeInSeconds();
+  const stride=strideFor(tsec.length);
+  document.getElementById("dsInfo").textContent =
+    stride>1 ? `間引き 1/${stride}（${tsec.length}→約${Math.ceil(tsec.length/stride)}点）` : "全点表示";
+
+  const isLsb = cfg.unitMode==="lsb";
+  const traces=[];
+  AXES.forEach(a=>{
+    const yfull=seriesValues(a);
+    const {x,y}=downsample(tsec,yfull,stride);
+    traces.push({
+      type:cfg.renderer, mode:"lines", name:a,
+      x, y,
+      xaxis:"x", yaxis: IS_MOMENT(a) ? "y2" : "y",
+      line:{color:cfg.colors[a], width:cfg.lineWidth},
+      visible: cfg.visible[a] ? true : "legendonly",
+      hovertemplate:`%{x:.3f}s, %{y:.3f}<extra>${a}</extra>`,
+    });
+  });
+
+  const F=cfg.fontSize;
+  const axBase={
+    showgrid:cfg.gridOn, gridcolor:"#e6e8ec", zeroline:false,
+    linecolor:"#888", mirror:true, ticks:"outside", tickfont:{size:F-2},
+    titlefont:{size:F},
+  };
+  const xrange = cfg.xAuto ? undefined : [cfg.xMin,cfg.xMax];
+  const layout={
+    margin:{l:70,r:20,t:cfg.titleText?40:14,b:50},
+    showlegend:cfg.legendOn,
+    legend:{font:{size:F-2}, x:1, xanchor:"right", y:1, bgcolor:"rgba(255,255,255,0.7)"},
+    title: cfg.titleText ? {text:cfg.titleText, font:{size:F+2}} : undefined,
+    xaxis:Object.assign({}, axBase, {
+      domain:[0,1], anchor:"y2", title:{text:cfg.xLabel,font:{size:F}},
+      range:xrange, autorange:cfg.xAuto?true:false,
+    }),
+    yaxis:Object.assign({}, axBase, {
+      domain:[0.56,1.0], title:{text: isLsb?"Force (LSB)":cfg.fLabel,font:{size:F}},
+      range: cfg.fAuto?undefined:[cfg.fMin,cfg.fMax], autorange: isLsb?true:(cfg.fAuto?true:false),
+    }),
+    yaxis2:Object.assign({}, axBase, {
+      domain:[0,0.44], anchor:"x", title:{text: isLsb?"Moments (LSB)":cfg.mLabel,font:{size:F}},
+      range: cfg.mAuto?undefined:[cfg.mMin,cfg.mMax], autorange: isLsb?true:(cfg.mAuto?true:false),
+    }),
+    paper_bgcolor:"#fff", plot_bgcolor:"#fff",
+  };
+  if(isLsb){ // LSB表示時はレンジ自動が妥当
+    layout.yaxis.autorange=true; layout.yaxis2.autorange=true;
+  }
+  const config={responsive:true, displaylogo:false, scrollZoom:true,
+    modeBarButtonsToRemove:["lasso2d","select2d"],
+    toImageButtonOptions:{format:"png", filename:"force_torque", scale:2}};
+  Plotly.react("plot", traces, layout, config);
+}
+
+// ===== ファイル読込 =========================================================
+function loadFile(file){
+  setStatus(`読み込み中: ${file.name} ...`);
+  const reader=new FileReader();
+  reader.onload=e=>{
+    try{
+      const parsed=parseCSV(e.target.result);
+      if(parsed.t.length===0){ setStatus("有効なデータ行が見つかりません。CSV形式をご確認ください。"); return; }
+      raw=parsed;
+      // 時間単位を自動推定して反映
+      cfg.timeUnit=guessTimeUnit(raw.t); document.getElementById("timeUnit").value=cfg.timeUnit;
+      document.getElementById("dropzone").style.display="none";
+      document.getElementById("plot").style.display="block";
+      const tsec=timeInSeconds();
+      document.getElementById("fileinfo").textContent=
+        `${file.name} ／ ${raw.t.length.toLocaleString()}行 ／ ${tsec[tsec.length-1].toFixed(1)}s`;
+      draw();
+      setStatus(`読込完了: ${raw.t.length.toLocaleString()}行` + (parsed.bad?`（スキップ${parsed.bad}行）`:""));
+      Plotly.Plots.resize(document.getElementById("plot"));
+    }catch(err){ console.error(err); setStatus("読み込みエラー: "+err.message); }
+  };
+  reader.onerror=()=>setStatus("ファイル読み込みに失敗しました。");
+  reader.readAsText(file);
+}
+function setStatus(s){ document.getElementById("status").textContent=s; }
+
+// ===== 自動ゼロ =============================================================
+function autoZero(){
+  if(!raw){ setStatus("先にCSVを読み込んでください。"); return; }
+  uiToCfg();
+  const tsec=timeInSeconds();
+  const t0=parseFloat(document.getElementById("autoZeroStart").value);
+  const t1=parseFloat(document.getElementById("autoZeroEnd").value);
+  const idx=[]; for(let i=0;i<tsec.length;i++){ if(tsec[i]>=t0 && tsec[i]<=t1) idx.push(i); }
+  if(idx.length===0){ setStatus("指定区間にデータがありません。"); return; }
+  AXES.forEach(a=>{
+    let s=0; for(const i of idx) s+=raw.lsb[a][i];
+    cfg.zero[a]=Math.round(s/idx.length);
+    document.getElementById(`zero_${a}`).value=cfg.zero[a];
+  });
+  setStatus(`自動ゼロ完了（${t0}〜${t1}s の平均, ${idx.length}点）`);
+  draw();
+}
+
+// ===== 設定保存 =============================================================
+function saveCfg(){ uiToCfg(); localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); setStatus("設定を保存しました。"); }
+function loadCfgFromStorage(){
+  try{ const s=localStorage.getItem(CFG_KEY); if(!s) return;
+    const o=JSON.parse(s); Object.assign(cfg,o);
+    ["zero","sens","colors","visible"].forEach(k=>{ if(o[k]) Object.assign(cfg[k],o[k]); });
+  }catch(e){}
+}
+function resetCfg(){
+  Object.assign(cfg, defaultCfg()); cfgToUI();
+  if(raw){ cfg.timeUnit=guessTimeUnit(raw.t); document.getElementById("timeUnit").value=cfg.timeUnit; draw(); }
+  setStatus("設定を既定値に戻しました。");
+}
+
+// ===== イベント =============================================================
+function wire(){
+  const dz=document.getElementById("dropzone");
+  const fi=document.getElementById("fileInput");
+  // ドラッグ＆ドロップ（ウィンドウ全体で受付）
+  ["dragenter","dragover"].forEach(ev=>window.addEventListener(ev,e=>{e.preventDefault();dz.classList.add("drag");}));
+  ["dragleave","drop"].forEach(ev=>window.addEventListener(ev,e=>{e.preventDefault();
+    if(ev==="dragleave" && e.relatedTarget) return; dz.classList.remove("drag");}));
+  window.addEventListener("drop",e=>{ e.preventDefault();
+    const f=e.dataTransfer.files[0]; if(f) loadFile(f); });
+  dz.addEventListener("click",()=>fi.click());
+  document.getElementById("reloadBtn").addEventListener("click",()=>fi.click());
+  fi.addEventListener("change",e=>{ const f=e.target.files[0]; if(f) loadFile(f); fi.value=""; });
+
+  // 色テキスト↔カラーピッカー同期
+  AXES.forEach(a=>{
+    const c=document.getElementById(`col_${a}`), ct=document.getElementById(`colt_${a}`);
+    c.addEventListener("input",()=>{ ct.value=c.value; draw(); });
+    ct.addEventListener("change",()=>{ if(/^#?[0-9a-fA-F]{6}$/.test(ct.value)){ if(ct.value[0]!=="#")ct.value="#"+ct.value; c.value=ct.value; draw(); }});
+  });
+
+  // 値変更で再描画（CSV読込後のみ）
+  const ids=["unitMode","timeUnit","lineWidth","maxPoints","renderer",
+    "xAuto","xMin","xMax","fAuto","fMin","fMax","mAuto","mMin","mMax",
+    "titleText","xLabel","fLabel","mLabel","fontSize","gridOn","legendOn"];
+  ids.forEach(id=>{ const e=document.getElementById(id); if(e) e.addEventListener("change",()=>{ if(raw) draw(); }); });
+  AXES.forEach(a=>{
+    document.getElementById(`vis_${a}`).addEventListener("change",()=>{ if(raw) draw(); });
+    document.getElementById(`sens_${a}`).addEventListener("change",()=>{ if(raw) draw(); });
+    document.getElementById(`zero_${a}`).addEventListener("change",()=>{ if(raw) draw(); });
+  });
+
+  document.getElementById("applyZero").addEventListener("click",()=>{
+    const z=parseFloat(document.getElementById("zeroCommon").value);
+    AXES.forEach(a=>{ cfg.zero[a]=z; document.getElementById(`zero_${a}`).value=z; });
+    if(raw) draw();
+  });
+  document.getElementById("autoZeroBtn").addEventListener("click",autoZero);
+  document.getElementById("pngBtn").addEventListener("click",()=>{ if(raw)
+    Plotly.downloadImage("plot",{format:"png",scale:2,filename:"force_torque",
+      width:document.getElementById("plot").clientWidth, height:document.getElementById("plot").clientHeight}); });
+  document.getElementById("svgBtn").addEventListener("click",()=>{ if(raw)
+    Plotly.downloadImage("plot",{format:"svg",filename:"force_torque"}); });
+  document.getElementById("saveCfg").addEventListener("click",saveCfg);
+  document.getElementById("resetCfg").addEventListener("click",resetCfg);
+}
+
+// ===== 起動 =================================================================
+buildDynamicRows();
+loadCfgFromStorage();
+cfgToUI();
+wire();
+setStatus("CSVをドラッグ＆ドロップしてください。");
+</script>
+</body>
+</html>
