@@ -108,6 +108,15 @@
     <details open>
       <summary>② 軸（時間・縦軸）</summary>
       <div class="body">
+        <div class="row">
+          <label>縦軸の基準</label>
+          <select id="zeroBaseline">
+            <option value="auto">自動（データに合わせる）</option>
+            <option value="center">ゼロ中心（0を中央）</option>
+            <option value="tozero">ゼロ起点（0を含める）</option>
+          </select>
+        </div>
+        <div class="hint">「自動」以外を選ぶと、0を基準にして縦軸を取り、ゼロ線を表示します（力・モーメント共通／各軸が「自動」の時に有効）。</div>
         <fieldset>
           <legend>横軸 時間 [s]</legend>
           <div class="row"><label><input type="checkbox" id="xAuto" checked/> 自動</label></div>
@@ -223,7 +232,7 @@ const cfg = defaultCfg();
 
 function defaultCfg(){
   const c = {
-    unitMode:"phys", timeUnit:"ms", excludeNoData:true,
+    unitMode:"phys", timeUnit:"ms", excludeNoData:true, zeroBaseline:"auto",
     zero:{}, sens:{}, colors:{}, visible:{},
     lineWidth:1.4, maxPoints:40000, renderer:"scattergl",
     xAuto:true,xMin:0,xMax:60, fAuto:true,fMin:-30,fMax:30, mAuto:true,mMin:-5,mMax:5,
@@ -261,7 +270,7 @@ function buildDynamicRows(){
 function cfgToUI(){
   const v=(id,val)=>{const e=document.getElementById(id); if(e) e.value=val;};
   const chk=(id,val)=>{const e=document.getElementById(id); if(e) e.checked=val;};
-  v("unitMode",cfg.unitMode); v("timeUnit",cfg.timeUnit); chk("excludeNoData",cfg.excludeNoData);
+  v("unitMode",cfg.unitMode); v("timeUnit",cfg.timeUnit); chk("excludeNoData",cfg.excludeNoData); v("zeroBaseline",cfg.zeroBaseline);
   v("lineWidth",cfg.lineWidth); v("maxPoints",cfg.maxPoints); v("renderer",cfg.renderer);
   chk("xAuto",cfg.xAuto); v("xMin",cfg.xMin); v("xMax",cfg.xMax);
   chk("fAuto",cfg.fAuto); v("fMin",cfg.fMin); v("fMax",cfg.fMax);
@@ -278,7 +287,7 @@ function uiToCfg(){
   const num=id=>parseFloat(document.getElementById(id).value);
   const str=id=>document.getElementById(id).value;
   const chk=id=>document.getElementById(id).checked;
-  cfg.unitMode=str("unitMode"); cfg.timeUnit=str("timeUnit"); cfg.excludeNoData=chk("excludeNoData");
+  cfg.unitMode=str("unitMode"); cfg.timeUnit=str("timeUnit"); cfg.excludeNoData=chk("excludeNoData"); cfg.zeroBaseline=str("zeroBaseline");
   cfg.lineWidth=num("lineWidth"); cfg.maxPoints=Math.max(1000,num("maxPoints")||40000); cfg.renderer=str("renderer");
   cfg.xAuto=chk("xAuto"); cfg.xMin=num("xMin"); cfg.xMax=num("xMax");
   cfg.fAuto=chk("fAuto"); cfg.fMin=num("fMin"); cfg.fMax=num("fMax");
@@ -360,6 +369,45 @@ function downsample(x,y,stride){
   return {x:xs,y:ys};
 }
 
+// ===== 縦軸の値域（ゼロ基準モード対応） =====================================
+function computeExtent(axes){
+  if(!raw) return null;
+  let mn=Infinity, mx=-Infinity;
+  for(const a of axes){
+    if(!cfg.visible[a]) continue;
+    const y=seriesValues(a);
+    for(let i=0;i<y.length;i++){ const v=y[i]; if(v==null) continue; if(v<mn)mn=v; if(v>mx)mx=v; }
+  }
+  return mn===Infinity ? null : {min:mn, max:mx};
+}
+// axes:対象系列, auto:その軸が自動か, manual:[min,max], isLsb
+function yAxisSpec(axes, auto, manual, isLsb){
+  let range = auto ? undefined : manual;
+  let autorange = isLsb ? true : (auto ? true : false);
+  let zeroline=false, zerolinecolor="#bbb", zerolinewidth=1;
+  if(!isLsb && auto && cfg.zeroBaseline!=="auto"){
+    const ext=computeExtent(axes);
+    if(ext){
+      if(cfg.zeroBaseline==="center"){
+        const M=(Math.max(Math.abs(ext.min),Math.abs(ext.max))||1)*1.05;
+        range=[-M, M];
+      } else { // tozero: 0を必ず含める
+        const lo=Math.min(0,ext.min), hi=Math.max(0,ext.max);
+        const pad=((hi-lo)||1)*0.05;
+        range=[ lo<0?lo-pad:0, hi>0?hi+pad:0 ];
+        if(range[0]===range[1]) range=[-1,1];
+      }
+      autorange=false; zeroline=true; zerolinecolor="#888"; zerolinewidth=1.2;
+    }
+  }
+  return {range, autorange, zeroline, zerolinecolor, zerolinewidth};
+}
+function applyYSpec(axObj, spec){
+  axObj.range=spec.range; axObj.autorange=spec.autorange;
+  axObj.zeroline=spec.zeroline; axObj.zerolinecolor=spec.zerolinecolor; axObj.zerolinewidth=spec.zerolinewidth;
+  return axObj;
+}
+
 // ===== 描画 =================================================================
 function draw(){
   if(!raw) return;
@@ -429,19 +477,14 @@ function draw(){
       domain:[0,1], anchor:"y", matches:"x", showticklabels:true,
       title:{text:cfg.xLabel,font:{size:F}},
     }),
-    yaxis:Object.assign({}, axBase, {
+    yaxis:applyYSpec(Object.assign({}, axBase, {
       domain:[0.58,1.0], anchor:"x2", title:{text: isLsb?"Force (LSB)":cfg.fLabel,font:{size:F}},
-      range: cfg.fAuto?undefined:[cfg.fMin,cfg.fMax], autorange: isLsb?true:(cfg.fAuto?true:false),
-    }),
-    yaxis2:Object.assign({}, axBase, {
+    }), yAxisSpec(["Fx","Fy","Fz"], cfg.fAuto, [cfg.fMin,cfg.fMax], isLsb)),
+    yaxis2:applyYSpec(Object.assign({}, axBase, {
       domain:[0,0.40], anchor:"x", title:{text: isLsb?"Moments (LSB)":cfg.mLabel,font:{size:F}},
-      range: cfg.mAuto?undefined:[cfg.mMin,cfg.mMax], autorange: isLsb?true:(cfg.mAuto?true:false),
-    }),
+    }), yAxisSpec(["Mx","My","Mz"], cfg.mAuto, [cfg.mMin,cfg.mMax], isLsb)),
     paper_bgcolor:"#fff", plot_bgcolor:"#fff",
   };
-  if(isLsb){ // LSB表示時はレンジ自動が妥当
-    layout.yaxis.autorange=true; layout.yaxis2.autorange=true;
-  }
   const config={responsive:true, displaylogo:false, scrollZoom:true,
     modeBarButtonsToRemove:["lasso2d","select2d"],
     toImageButtonOptions:{format:"png", filename:"force_torque", scale:2}};
@@ -485,8 +528,8 @@ function buildGroupFigure(which, svgVector){
       title: cfg.titleText ? {text:cfg.titleText,font:{size:F+2}} : undefined,
       xaxis:Object.assign({},axBase,{domain:[0,1],anchor:"y2",title:{text:cfg.xLabel,font:{size:F}},range:xrange,autorange:xAutorange}),
       xaxis2:Object.assign({},axBase,{domain:[0,1],anchor:"y",matches:"x",showticklabels:true,title:{text:cfg.xLabel,font:{size:F}}}),
-      yaxis:Object.assign({},axBase,{domain:[0.58,1.0],anchor:"x2",title:{text:isLsb?"Force (LSB)":cfg.fLabel,font:{size:F}},range:cfg.fAuto?undefined:[cfg.fMin,cfg.fMax],autorange:isLsb?true:(cfg.fAuto?true:false)}),
-      yaxis2:Object.assign({},axBase,{domain:[0,0.40],anchor:"x",title:{text:isLsb?"Moments (LSB)":cfg.mLabel,font:{size:F}},range:cfg.mAuto?undefined:[cfg.mMin,cfg.mMax],autorange:isLsb?true:(cfg.mAuto?true:false)}),
+      yaxis:applyYSpec(Object.assign({},axBase,{domain:[0.58,1.0],anchor:"x2",title:{text:isLsb?"Force (LSB)":cfg.fLabel,font:{size:F}}}), yAxisSpec(["Fx","Fy","Fz"],cfg.fAuto,[cfg.fMin,cfg.fMax],isLsb)),
+      yaxis2:applyYSpec(Object.assign({},axBase,{domain:[0,0.40],anchor:"x",title:{text:isLsb?"Moments (LSB)":cfg.mLabel,font:{size:F}}}), yAxisSpec(["Mx","My","Mz"],cfg.mAuto,[cfg.mMin,cfg.mMax],isLsb)),
       paper_bgcolor:"#fff", plot_bgcolor:"#fff" };
     return {traces,layout};
   }
@@ -496,8 +539,8 @@ function buildGroupFigure(which, svgVector){
   const axes = isForce ? ["Fx","Fy","Fz"] : ["Mx","My","Mz"];
   const traces = axes.map(mk);
   const yTitle = isForce ? (isLsb?"Force (LSB)":cfg.fLabel) : (isLsb?"Moments (LSB)":cfg.mLabel);
-  const yAuto  = isForce ? (isLsb||cfg.fAuto) : (isLsb||cfg.mAuto);
-  const yRange = isForce ? (cfg.fAuto?undefined:[cfg.fMin,cfg.fMax]) : (cfg.mAuto?undefined:[cfg.mMin,cfg.mMax]);
+  const yAutoFlag = isForce ? cfg.fAuto : cfg.mAuto;
+  const yManual   = isForce ? [cfg.fMin,cfg.fMax] : [cfg.mMin,cfg.mMax];
   const base   = isForce ? "力 (Force)" : "モーメント (Moments)";
   const title  = cfg.titleText ? `${cfg.titleText}（${isForce?"力":"モーメント"}）` : base;
   const layout={ margin:{l:70,r:20,t:40,b:50},
@@ -505,7 +548,7 @@ function buildGroupFigure(which, svgVector){
     legend:{font:{size:F-2}, x:1, xanchor:"right", y:1, yanchor:"top", bgcolor:"rgba(255,255,255,0.7)"},
     title:{text:title, font:{size:F+2}},
     xaxis:Object.assign({},axBase,{title:{text:cfg.xLabel,font:{size:F}},range:xrange,autorange:xAutorange}),
-    yaxis:Object.assign({},axBase,{title:{text:yTitle,font:{size:F}},range:yRange,autorange:yAuto?true:false}),
+    yaxis:applyYSpec(Object.assign({},axBase,{title:{text:yTitle,font:{size:F}}}), yAxisSpec(axes, yAutoFlag, yManual, isLsb)),
     paper_bgcolor:"#fff", plot_bgcolor:"#fff" };
   return {traces,layout};
 }
@@ -612,7 +655,7 @@ function wire(){
   });
 
   // 値変更で再描画（CSV読込後のみ）
-  const ids=["unitMode","timeUnit","excludeNoData","lineWidth","maxPoints","renderer",
+  const ids=["unitMode","timeUnit","excludeNoData","zeroBaseline","lineWidth","maxPoints","renderer",
     "xAuto","xMin","xMax","fAuto","fMin","fMax","mAuto","mMin","mMax",
     "titleText","xLabel","fLabel","mLabel","fontSize","gridOn","legendOn"];
   ids.forEach(id=>{ const e=document.getElementById(id); if(e) e.addEventListener("change",()=>{ if(raw) draw(); }); });
