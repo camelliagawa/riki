@@ -35,10 +35,10 @@
   .row label{flex:1;color:var(--text);}
   .row input[type=number],.row input[type=text],.row select{width:90px;padding:3px 5px;border:1px solid var(--border);border-radius:5px;font-size:12.5px;}
   .row input[type=text].wide{width:150px;}
-  .axisrow{display:grid;grid-template-columns:18px 30px 18px 1fr;align-items:center;gap:6px;margin:4px 0;font-size:12.5px;}
+  .axisrow{display:grid;grid-template-columns:16px 20px 13px 1fr 1fr;align-items:center;gap:5px;margin:4px 0;font-size:12.5px;}
   .axisrow input[type=number]{width:60px;padding:3px;border:1px solid var(--border);border-radius:5px;}
-  .axisrow .sw{width:16px;height:16px;border:1px solid var(--border);border-radius:3px;}
-  .axisrow select.colorsel{width:100%;padding:3px;border:1px solid var(--border);border-radius:5px;font-size:12px;}
+  .axisrow .sw{width:14px;height:14px;border:1px solid var(--border);border-radius:3px;}
+  .axisrow select.colorsel,.axisrow select.dashsel{width:100%;padding:3px;border:1px solid var(--border);border-radius:5px;font-size:11.5px;min-width:0;}
   .hint{font-size:11px;color:var(--muted);margin:4px 0;line-height:1.4;}
   button{padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:#fff;cursor:pointer;font-size:12.5px;}
   button:hover{background:#f0f2f5;}
@@ -185,7 +185,7 @@
       <div class="body">
         <div id="seriesGrid"></div>
         <div class="row"><label>線の太さ</label><input type="number" id="lineWidth" value="1.4" step="0.1" min="0.2"/></div>
-        <div class="hint">色はパレットから選択（PowerPointテーマの色）。チェックを外すと非表示。凡例クリックでも表示/非表示できます。</div>
+        <div class="hint">色（PowerPointテーマの色）と線種（実線/破線/点線など）を選択。モノクロ印刷でも区別しやすくなります。チェックを外すと非表示、凡例クリックでも切替可。</div>
       </div>
     </details>
 
@@ -280,6 +280,9 @@ const PP_COLORS = (()=>{
 })();
 // 既定色＝テーマのアクセント色（PowerPoint標準のグラフ色に準拠）
 const DEFAULT_COLORS = {Fx:"#4472C4",Fy:"#ED7D31",Fz:"#70AD47",Mx:"#FFC000",My:"#5B9BD5",Mz:"#44546A"};
+// 線種（モノクロでも区別できるよう各グラフ内で実線/破線/点線を既定に）
+const DASH_OPTS = [["実線","solid"],["破線","dash"],["点線","dot"],["長破線","longdash"],["一点鎖線","dashdot"],["長一点鎖","longdashdot"]];
+const DEFAULT_DASH = {Fx:"solid",Fy:"dash",Fz:"dot",Mx:"solid",My:"dash",Mz:"dot"};
 // 出荷特性データ（ZEF-6A100-4-RAD）の主軸感度を初期値に
 const DEFAULT_SENS = {Fx:64.650,Fy:65.010,Fz:65.860,Mx:1630.250,My:1630.250,Mz:1572.000};
 const DEFAULT_ZERO = 8192;
@@ -292,7 +295,7 @@ const cfg = defaultCfg();
 function defaultCfg(){
   const c = {
     unitMode:"phys", timeUnit:"ms", excludeNoData:true, zeroBaseline:"auto",
-    zero:{}, sens:{}, colors:{}, visible:{},
+    zero:{}, sens:{}, colors:{}, dash:{}, visible:{},
     lineWidth:1.4, maxPoints:40000, renderer:"scattergl",
     xAuto:true,xMin:0,xMax:60, fAuto:true,fMin:-30,fMax:30, mAuto:true,mMin:-5,mMax:5,
     titleText:"", xLabel:"time (s)", fLabel:"Force (N)", mLabel:"Moments (Nm)",
@@ -300,7 +303,7 @@ function defaultCfg(){
     flipEnable:false, flipBounds:"", flipAxes:{}, perSegZero:false,
     boundaryHide:0, hideRanges:"", showRaw:false,
   };
-  AXES.forEach(a=>{ c.zero[a]=DEFAULT_ZERO; c.sens[a]=DEFAULT_SENS[a]; c.colors[a]=DEFAULT_COLORS[a]; c.visible[a]=true; c.flipAxes[a]=IS_MOMENT(a)?(a!=="My"):(a!=="Fz"); });
+  AXES.forEach(a=>{ c.zero[a]=DEFAULT_ZERO; c.sens[a]=DEFAULT_SENS[a]; c.colors[a]=DEFAULT_COLORS[a]; c.dash[a]=DEFAULT_DASH[a]; c.visible[a]=true; c.flipAxes[a]=IS_MOMENT(a)?(a!=="My"):(a!=="Fz"); });
   return c;
 }
 
@@ -342,11 +345,13 @@ function buildDynamicRows(){
     const r2=document.createElement("div"); r2.className="row";
     r2.innerHTML=`<label>${a}</label><input type="number" step="1" id="zero_${a}">`;
     zg.appendChild(r2);
-    // 系列（色・表示）— 色はパレットから選択
+    // 系列（色・線種・表示）— 色はパレット、線種は実線/破線/点線など
     const r3=document.createElement("div"); r3.className="axisrow";
     const opts=PP_COLORS.map(([nm,hex])=>`<option value="${hex}" style="background:${hex};color:${textOn(hex)}">${nm}</option>`).join("");
+    const dopts=DASH_OPTS.map(([nm,v])=>`<option value="${v}">${nm}</option>`).join("");
     r3.innerHTML=`<input type="checkbox" id="vis_${a}"><span>${a}</span>`+
-      `<span class="sw" id="sw_${a}"></span><select class="colorsel" id="col_${a}">${opts}</select>`;
+      `<span class="sw" id="sw_${a}"></span><select class="colorsel" id="col_${a}">${opts}</select>`+
+      `<select class="dashsel" id="dash_${a}">${dopts}</select>`;
     xg.appendChild(r3);
   });
 }
@@ -366,7 +371,7 @@ function cfgToUI(){
   v("boundaryHide",cfg.boundaryHide); v("hideRanges",cfg.hideRanges);
   AXES.forEach(a=>{
     v(`sens_${a}`,cfg.sens[a]); v(`zero_${a}`,cfg.zero[a]);
-    setColorUI(a,cfg.colors[a]); chk(`vis_${a}`,cfg.visible[a]);
+    setColorUI(a,cfg.colors[a]); v(`dash_${a}`,cfg.dash[a]||"solid"); chk(`vis_${a}`,cfg.visible[a]);
     chk(`flip_${a}`,!!cfg.flipAxes[a]);
   });
 }
@@ -388,6 +393,7 @@ function uiToCfg(){
     cfg.sens[a]=num(`sens_${a}`)||DEFAULT_SENS[a];
     cfg.zero[a]=num(`zero_${a}`); if(isNaN(cfg.zero[a])) cfg.zero[a]=DEFAULT_ZERO;
     cfg.colors[a]=document.getElementById(`col_${a}`).value || DEFAULT_COLORS[a];
+    cfg.dash[a]=document.getElementById(`dash_${a}`).value || "solid";
     cfg.visible[a]=chk(`vis_${a}`);
     cfg.flipAxes[a]=chk(`flip_${a}`);
   });
@@ -707,7 +713,7 @@ function draw(){
       // 力は上段(x2/y)、モーメントは下段(x/y2)。凡例も上下で分離
       xaxis: isM ? "x" : "x2", yaxis: isM ? "y2" : "y",
       legend: isM ? "legend2" : "legend",
-      line:{color:cfg.colors[a], width:cfg.lineWidth},
+      line:{color:cfg.colors[a], width:cfg.lineWidth, dash:cfg.dash[a]||"solid"},
       visible: cfg.visible[a] ? true : "legendonly",
       hovertemplate:`%{x:.3f}s, %{y:.3f}<extra>${a}</extra>`,
     });
@@ -783,7 +789,7 @@ function buildGroupFigure(which, svgVector){
   const rtype = svgVector ? "scatter" : cfg.renderer;
   const mk=(a)=>{ const {x,y}=downsample(tsec,seriesValues(a),stride);
     return {type:rtype, mode:"lines", name:a, x, y,
-      line:{color:cfg.colors[a], width:cfg.lineWidth},
+      line:{color:cfg.colors[a], width:cfg.lineWidth, dash:cfg.dash[a]||"solid"},
       visible: cfg.visible[a] ? true : "legendonly",
       hovertemplate:`%{x:.3f}s, %{y:.3f}<extra>${a}</extra>`}; };
 
@@ -950,7 +956,7 @@ function saveCfg(){ uiToCfg(); localStorage.setItem(CFG_KEY, JSON.stringify(cfg)
 function loadCfgFromStorage(){
   try{ const s=localStorage.getItem(CFG_KEY); if(!s) return;
     const o=JSON.parse(s); Object.assign(cfg,o);
-    ["zero","sens","colors","visible","flipAxes"].forEach(k=>{ if(o[k]) Object.assign(cfg[k],o[k]); });
+    ["zero","sens","colors","dash","visible","flipAxes"].forEach(k=>{ if(o[k]) Object.assign(cfg[k],o[k]); });
   }catch(e){}
 }
 function resetCfg(){
@@ -973,10 +979,11 @@ function wire(){
   document.getElementById("reloadBtn").addEventListener("click",()=>fi.click());
   fi.addEventListener("change",e=>{ const f=e.target.files[0]; if(f) loadFile(f); fi.value=""; });
 
-  // 色パレット選択
+  // 色パレット・線種の選択
   AXES.forEach(a=>{
     const c=document.getElementById(`col_${a}`);
     c.addEventListener("change",()=>{ const sw=document.getElementById(`sw_${a}`); if(sw) sw.style.background=c.value; draw(); });
+    document.getElementById(`dash_${a}`).addEventListener("change",()=>{ if(raw) draw(); });
   });
 
   // 値変更で再描画（CSV読込後のみ）
