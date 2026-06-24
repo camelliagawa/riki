@@ -170,9 +170,19 @@
       </div>
     </details>
 
+    <div class="row" style="margin-top:6px">
+      <label>画像の形式</label>
+      <select id="imgFmt">
+        <option value="png">PNG（2倍解像度）</option>
+        <option value="svg">SVG（ベクタ）</option>
+      </select>
+    </div>
     <div class="btnrow">
-      <button class="primary" id="pngBtn">PNG出力</button>
-      <button id="svgBtn">SVG出力</button>
+      <button class="primary" id="forceImgBtn">力グラフを出力</button>
+      <button class="primary" id="momentImgBtn">モーメントグラフを出力</button>
+    </div>
+    <div class="btnrow">
+      <button id="bothImgBtn">力＋モーメントを1枚で出力</button>
     </div>
     <div class="btnrow">
       <button id="saveCfg" title="設定をブラウザに保存">設定を保存</button>
@@ -375,12 +385,15 @@ function draw(){
   const isLsb = cfg.unitMode==="lsb";
   const traces=[];
   AXES.forEach(a=>{
+    const isM=IS_MOMENT(a);
     const yfull=seriesValues(a);
     const {x,y}=downsample(tsec,yfull,stride);
     traces.push({
       type:cfg.renderer, mode:"lines", name:a,
       x, y,
-      xaxis:"x", yaxis: IS_MOMENT(a) ? "y2" : "y",
+      // 力は上段(x2/y)、モーメントは下段(x/y2)。凡例も上下で分離
+      xaxis: isM ? "x" : "x2", yaxis: isM ? "y2" : "y",
+      legend: isM ? "legend2" : "legend",
       line:{color:cfg.colors[a], width:cfg.lineWidth},
       visible: cfg.visible[a] ? true : "legendonly",
       hovertemplate:`%{x:.3f}s, %{y:.3f}<extra>${a}</extra>`,
@@ -399,21 +412,29 @@ function draw(){
   if(cfg.xAuto && cfg.excludeNoData && loIdx>=0 && nInvalid>0){
     xrange=[tsec[loIdx], tsec[hiIdx]]; xAutorange=false;
   }
+  const legendBase={font:{size:F-2}, x:1, xanchor:"right", bgcolor:"rgba(255,255,255,0.7)"};
   const layout={
     margin:{l:70,r:20,t:cfg.titleText?40:14,b:50},
     showlegend:cfg.legendOn,
-    legend:{font:{size:F-2}, x:1, xanchor:"right", y:1, bgcolor:"rgba(255,255,255,0.7)"},
+    legend:Object.assign({}, legendBase, {y:1.0, yanchor:"top"}),       // 力（上段）
+    legend2:Object.assign({}, legendBase, {y:0.40, yanchor:"top"}),     // モーメント（下段）
     title: cfg.titleText ? {text:cfg.titleText, font:{size:F+2}} : undefined,
+    // 下段（モーメント）の横軸＝基準。上段（力）の x2 はこれに追従。
     xaxis:Object.assign({}, axBase, {
       domain:[0,1], anchor:"y2", title:{text:cfg.xLabel,font:{size:F}},
       range:xrange, autorange:xAutorange,
     }),
+    // 上段（力）にも時間の目盛・ラベルを表示
+    xaxis2:Object.assign({}, axBase, {
+      domain:[0,1], anchor:"y", matches:"x", showticklabels:true,
+      title:{text:cfg.xLabel,font:{size:F}},
+    }),
     yaxis:Object.assign({}, axBase, {
-      domain:[0.56,1.0], title:{text: isLsb?"Force (LSB)":cfg.fLabel,font:{size:F}},
+      domain:[0.58,1.0], anchor:"x2", title:{text: isLsb?"Force (LSB)":cfg.fLabel,font:{size:F}},
       range: cfg.fAuto?undefined:[cfg.fMin,cfg.fMax], autorange: isLsb?true:(cfg.fAuto?true:false),
     }),
     yaxis2:Object.assign({}, axBase, {
-      domain:[0,0.44], anchor:"x", title:{text: isLsb?"Moments (LSB)":cfg.mLabel,font:{size:F}},
+      domain:[0,0.40], anchor:"x", title:{text: isLsb?"Moments (LSB)":cfg.mLabel,font:{size:F}},
       range: cfg.mAuto?undefined:[cfg.mMin,cfg.mMax], autorange: isLsb?true:(cfg.mAuto?true:false),
     }),
     paper_bgcolor:"#fff", plot_bgcolor:"#fff",
@@ -425,6 +446,90 @@ function draw(){
     modeBarButtonsToRemove:["lasso2d","select2d"],
     toImageButtonOptions:{format:"png", filename:"force_torque", scale:2}};
   Plotly.react("plot", traces, layout, config);
+}
+
+// ===== 画像出力（力／モーメントを別々に） ===================================
+function validBounds(){
+  if(!raw) return null;
+  let lo=-1,hi=-1;
+  for(let i=0;i<raw.invalid.length;i++){ if(!raw.invalid[i]){ if(lo<0)lo=i; hi=i; } }
+  return lo>=0?[lo,hi]:null;
+}
+// which: "force" | "moment" | "both" 。svgVector時はベクタ化のためSVGレンダラに。
+function buildGroupFigure(which, svgVector){
+  const isLsb=cfg.unitMode==="lsb";
+  const tsec=timeInSeconds();
+  const stride=strideFor(tsec.length);
+  const F=cfg.fontSize;
+  const axBase={showgrid:cfg.gridOn, gridcolor:"#e6e8ec", zeroline:false,
+    linecolor:"#888", mirror:true, ticks:"outside", tickfont:{size:F-2}, titlefont:{size:F}};
+  // 横軸レンジ（画面と同じロジック）
+  let xrange = cfg.xAuto ? undefined : [cfg.xMin,cfg.xMax];
+  let xAutorange = cfg.xAuto;
+  if(cfg.xAuto && cfg.excludeNoData){ const b=validBounds(); if(b){ xrange=[tsec[b[0]],tsec[b[1]]]; xAutorange=false; } }
+  const rtype = svgVector ? "scatter" : cfg.renderer;
+  const mk=(a)=>{ const {x,y}=downsample(tsec,seriesValues(a),stride);
+    return {type:rtype, mode:"lines", name:a, x, y,
+      line:{color:cfg.colors[a], width:cfg.lineWidth},
+      visible: cfg.visible[a] ? true : "legendonly",
+      hovertemplate:`%{x:.3f}s, %{y:.3f}<extra>${a}</extra>`}; };
+
+  if(which==="both"){ // 旧来の2段（凡例も上下分離）
+    const traces=AXES.map(a=>{ const isM=IS_MOMENT(a); const tr=mk(a);
+      tr.xaxis=isM?"x":"x2"; tr.yaxis=isM?"y2":"y"; tr.legend=isM?"legend2":"legend"; return tr; });
+    const legendBase={font:{size:F-2}, x:1, xanchor:"right", bgcolor:"rgba(255,255,255,0.7)"};
+    const layout={ margin:{l:70,r:20,t:cfg.titleText?40:14,b:50},
+      showlegend:cfg.legendOn,
+      legend:Object.assign({},legendBase,{y:1.0,yanchor:"top"}),
+      legend2:Object.assign({},legendBase,{y:0.40,yanchor:"top"}),
+      title: cfg.titleText ? {text:cfg.titleText,font:{size:F+2}} : undefined,
+      xaxis:Object.assign({},axBase,{domain:[0,1],anchor:"y2",title:{text:cfg.xLabel,font:{size:F}},range:xrange,autorange:xAutorange}),
+      xaxis2:Object.assign({},axBase,{domain:[0,1],anchor:"y",matches:"x",showticklabels:true,title:{text:cfg.xLabel,font:{size:F}}}),
+      yaxis:Object.assign({},axBase,{domain:[0.58,1.0],anchor:"x2",title:{text:isLsb?"Force (LSB)":cfg.fLabel,font:{size:F}},range:cfg.fAuto?undefined:[cfg.fMin,cfg.fMax],autorange:isLsb?true:(cfg.fAuto?true:false)}),
+      yaxis2:Object.assign({},axBase,{domain:[0,0.40],anchor:"x",title:{text:isLsb?"Moments (LSB)":cfg.mLabel,font:{size:F}},range:cfg.mAuto?undefined:[cfg.mMin,cfg.mMax],autorange:isLsb?true:(cfg.mAuto?true:false)}),
+      paper_bgcolor:"#fff", plot_bgcolor:"#fff" };
+    return {traces,layout};
+  }
+
+  // 単一グラフ（force / moment）
+  const isForce = which==="force";
+  const axes = isForce ? ["Fx","Fy","Fz"] : ["Mx","My","Mz"];
+  const traces = axes.map(mk);
+  const yTitle = isForce ? (isLsb?"Force (LSB)":cfg.fLabel) : (isLsb?"Moments (LSB)":cfg.mLabel);
+  const yAuto  = isForce ? (isLsb||cfg.fAuto) : (isLsb||cfg.mAuto);
+  const yRange = isForce ? (cfg.fAuto?undefined:[cfg.fMin,cfg.fMax]) : (cfg.mAuto?undefined:[cfg.mMin,cfg.mMax]);
+  const base   = isForce ? "力 (Force)" : "モーメント (Moments)";
+  const title  = cfg.titleText ? `${cfg.titleText}（${isForce?"力":"モーメント"}）` : base;
+  const layout={ margin:{l:70,r:20,t:40,b:50},
+    showlegend:cfg.legendOn,
+    legend:{font:{size:F-2}, x:1, xanchor:"right", y:1, yanchor:"top", bgcolor:"rgba(255,255,255,0.7)"},
+    title:{text:title, font:{size:F+2}},
+    xaxis:Object.assign({},axBase,{title:{text:cfg.xLabel,font:{size:F}},range:xrange,autorange:xAutorange}),
+    yaxis:Object.assign({},axBase,{title:{text:yTitle,font:{size:F}},range:yRange,autorange:yAuto?true:false}),
+    paper_bgcolor:"#fff", plot_bgcolor:"#fff" };
+  return {traces,layout};
+}
+function exportImage(which){
+  if(!raw){ setStatus("先にCSVを読み込んでください。"); return; }
+  uiToCfg();
+  const fmt=document.getElementById("imgFmt").value; // png | svg
+  const svg = fmt==="svg";
+  const {traces,layout}=buildGroupFigure(which, svg);
+  const main=document.getElementById("plot");
+  const w=main.clientWidth||1000;
+  const h= which==="both" ? (main.clientHeight||700)
+                          : Math.max(360, Math.round((main.clientHeight||700)*0.62));
+  const tmp=document.createElement("div");
+  tmp.style.cssText=`position:absolute;left:-99999px;top:0;width:${w}px;height:${h}px;`;
+  document.body.appendChild(tmp);
+  const fname = which==="force"?"force" : which==="moment"?"moment" : "force_moment";
+  const done=()=>{ try{Plotly.purge(tmp);}catch(e){} tmp.remove(); };
+  Plotly.newPlot(tmp, traces, layout, {staticPlot:true})
+    .then(()=>Plotly.downloadImage(tmp, svg
+      ? {format:"svg", filename:fname, width:w, height:h}
+      : {format:"png", scale:2, filename:fname, width:w, height:h}))
+    .then(()=>{ done(); setStatus(`画像を出力しました（${fname}.${fmt}）`); })
+    .catch(e=>{ console.error(e); done(); setStatus("画像出力エラー: "+e.message); });
 }
 
 // ===== ファイル読込 =========================================================
@@ -523,11 +628,9 @@ function wire(){
     if(raw) draw();
   });
   document.getElementById("autoZeroBtn").addEventListener("click",autoZero);
-  document.getElementById("pngBtn").addEventListener("click",()=>{ if(raw)
-    Plotly.downloadImage("plot",{format:"png",scale:2,filename:"force_torque",
-      width:document.getElementById("plot").clientWidth, height:document.getElementById("plot").clientHeight}); });
-  document.getElementById("svgBtn").addEventListener("click",()=>{ if(raw)
-    Plotly.downloadImage("plot",{format:"svg",filename:"force_torque"}); });
+  document.getElementById("forceImgBtn").addEventListener("click",()=>exportImage("force"));
+  document.getElementById("momentImgBtn").addEventListener("click",()=>exportImage("moment"));
+  document.getElementById("bothImgBtn").addEventListener("click",()=>exportImage("both"));
   document.getElementById("saveCfg").addEventListener("click",saveCfg);
   document.getElementById("resetCfg").addEventListener("click",resetCfg);
 }
