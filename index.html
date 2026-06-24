@@ -233,6 +233,13 @@
         <option value="svg">SVG（ベクタ）</option>
       </select>
     </div>
+    <div class="row">
+      <label>画像の背景</label>
+      <select id="imgBg">
+        <option value="transparent">透明</option>
+        <option value="white">白</option>
+      </select>
+    </div>
     <div class="btnrow">
       <button class="primary" id="forceImgBtn">力グラフを出力</button>
       <button class="primary" id="momentImgBtn">モーメントグラフを出力</button>
@@ -310,7 +317,7 @@ function defaultCfg(){
     titleText:"", xLabel:"time (s)", fLabel:"Force (N)", mLabel:"Moments (Nm)",
     fontSize:14, gridOn:true, legendOn:true,
     flipEnable:false, flipBounds:"", flipAxes:{}, perSegZero:false,
-    boundaryHide:0, hideRanges:"", showRaw:false,
+    boundaryHide:0, hideRanges:"", showRaw:false, imgBg:"transparent",
   };
   AXES.forEach(a=>{ c.zero[a]=DEFAULT_ZERO; c.sens[a]=DEFAULT_SENS[a]; c.colors[a]=DEFAULT_COLORS[a]; c.dash[a]=DEFAULT_DASH[a]; c.visible[a]=true; c.flipAxes[a]=IS_MOMENT(a)?(a!=="My"):(a!=="Fz"); });
   return c;
@@ -370,7 +377,7 @@ function cfgToUI(){
   const v=(id,val)=>{const e=document.getElementById(id); if(e) e.value=val;};
   const chk=(id,val)=>{const e=document.getElementById(id); if(e) e.checked=val;};
   v("unitMode",cfg.unitMode); v("timeUnit",cfg.timeUnit); chk("excludeNoData",cfg.excludeNoData); v("zeroBaseline",cfg.zeroBaseline);
-  v("lineWidth",cfg.lineWidth); v("maxPoints",cfg.maxPoints); v("renderer",cfg.renderer);
+  v("lineWidth",cfg.lineWidth); v("maxPoints",cfg.maxPoints); v("renderer",cfg.renderer); v("imgBg",cfg.imgBg);
   chk("xAuto",cfg.xAuto); v("xMin",cfg.xMin); v("xMax",cfg.xMax);
   chk("fAuto",cfg.fAuto); v("fMin",cfg.fMin); v("fMax",cfg.fMax);
   chk("mAuto",cfg.mAuto); v("mMin",cfg.mMin); v("mMax",cfg.mMax);
@@ -390,7 +397,7 @@ function uiToCfg(){
   const str=id=>document.getElementById(id).value;
   const chk=id=>document.getElementById(id).checked;
   cfg.unitMode=str("unitMode"); cfg.timeUnit=str("timeUnit"); cfg.excludeNoData=chk("excludeNoData"); cfg.zeroBaseline=str("zeroBaseline");
-  cfg.lineWidth=num("lineWidth"); cfg.maxPoints=Math.max(1000,num("maxPoints")||40000); cfg.renderer=str("renderer");
+  cfg.lineWidth=num("lineWidth"); cfg.maxPoints=Math.max(1000,num("maxPoints")||40000); cfg.renderer=str("renderer"); cfg.imgBg=str("imgBg");
   cfg.xAuto=chk("xAuto"); cfg.xMin=num("xMin"); cfg.xMax=num("xMax");
   cfg.fAuto=chk("fAuto"); cfg.fMin=num("fMin"); cfg.fMax=num("fMax");
   cfg.mAuto=chk("mAuto"); cfg.mMin=num("mMin"); cfg.mMax=num("mMax");
@@ -786,6 +793,7 @@ function buildGroupFigure(which, svgVector){
   updateFlipSign();
   updateHideMask();
   const isLsb=cfg.unitMode==="lsb";
+  const bg = cfg.imgBg==="white" ? "#fff" : "rgba(0,0,0,0)"; // 画像背景（既定: 透明）
   const tsec=timeInSeconds();
   const stride=strideFor(tsec.length);
   const F=cfg.fontSize;
@@ -815,7 +823,7 @@ function buildGroupFigure(which, svgVector){
       xaxis2:Object.assign({},axBase,{domain:[0,1],anchor:"y",matches:"x",showticklabels:true,title:{text:cfg.xLabel,font:{size:F}}}),
       yaxis:applyYSpec(Object.assign({},axBase,{domain:[0.58,1.0],anchor:"x2",title:{text:isLsb?"Force (LSB)":cfg.fLabel,font:{size:F}}}), yAxisSpec(["Fx","Fy","Fz"],cfg.fAuto,[cfg.fMin,cfg.fMax],isLsb)),
       yaxis2:applyYSpec(Object.assign({},axBase,{domain:[0,0.40],anchor:"x",title:{text:isLsb?"Moments (LSB)":cfg.mLabel,font:{size:F}}}), yAxisSpec(["Mx","My","Mz"],cfg.mAuto,[cfg.mMin,cfg.mMax],isLsb)),
-      paper_bgcolor:"#fff", plot_bgcolor:"#fff" };
+      paper_bgcolor:bg, plot_bgcolor:bg };
     return {traces,layout};
   }
 
@@ -834,7 +842,7 @@ function buildGroupFigure(which, svgVector){
     title:{text:title, font:{size:F+2}},
     xaxis:Object.assign({},axBase,{title:{text:cfg.xLabel,font:{size:F}},range:xrange,autorange:xAutorange}),
     yaxis:applyYSpec(Object.assign({},axBase,{title:{text:yTitle,font:{size:F}}}), yAxisSpec(axes, yAutoFlag, yManual, isLsb)),
-    paper_bgcolor:"#fff", plot_bgcolor:"#fff" };
+    paper_bgcolor:bg, plot_bgcolor:bg };
   return {traces,layout};
 }
 function exportImage(which){
