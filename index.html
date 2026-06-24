@@ -382,33 +382,57 @@ function updateFlipSeg(){
   }
 }
 
-// 活動区間（力が立っている区間）から工程の境界を自動検出
+// 工程の境界を自動検出。
+// 「力の絶対値」ではなく「力の動き(変動量)」で活動区間を判定するので、
+// 零点(オフセット)が未補正でも休止区間を正しく見分けられる。
 function detectBoundaries(){
   if(!raw) return [];
   const ts=timeInSeconds(), n=ts.length;
   const fx=raw.lsb.Fx, fy=raw.lsb.Fy, fz=raw.lsb.Fz;
   const sx=cfg.sens.Fx||1, sy=cfg.sens.Fy||1, sz=cfg.sens.Fz||1;
   const zx=cfg.zero.Fx, zy=cfg.zero.Fy, zz=cfg.zero.Fz;
-  const mag=new Float32Array(n); let peak=0;
-  for(let i=0;i<n;i++){
-    if(cfg.excludeNoData && raw.invalid[i]){ mag[i]=0; continue; }
-    const a=(fx[i]-zx)/sx, b=(fy[i]-zy)/sy, c=(fz[i]-zz)/sz;
-    const m=Math.sqrt(a*a+b*b+c*c); mag[i]=m; if(m>peak)peak=m;
-  }
-  const thr=Math.max(2, peak*0.12), minGap=1.0, minActive=0.5;
-  const runs=[]; let i=0;
+  // 0.2sビンごとの peak-to-peak（動きの量・オフセット非依存）
+  const binW=0.2, tc=[], ptp=[];
+  let i=0;
   while(i<n){
-    if(mag[i]>thr){ let j=i; while(j<n && mag[j]>thr) j++; runs.push([ts[i],ts[j-1]]); i=j; }
-    else i++;
+    const t0=ts[i]; let j=i, valid=false;
+    let mnx=Infinity,mxx=-Infinity,mny=Infinity,mxy=-Infinity,mnz=Infinity,mxz=-Infinity;
+    while(j<n && ts[j]<t0+binW){
+      if(!(cfg.excludeNoData && raw.invalid[j])){
+        valid=true;
+        const a=(fx[j]-zx)/sx, b=(fy[j]-zy)/sy, c=(fz[j]-zz)/sz;
+        if(a<mnx)mnx=a; if(a>mxx)mxx=a;
+        if(b<mny)mny=b; if(b>mxy)mxy=b;
+        if(c<mnz)mnz=c; if(c>mxz)mxz=c;
+      }
+      j++;
+    }
+    tc.push((t0+ts[j-1])/2);
+    ptp.push(valid ? (mxx-mnx)+(mxy-mny)+(mxz-mnz) : 0);
+    i=j;
   }
-  const merged=[];
-  for(const r of runs){
-    const last=merged[merged.length-1];
-    if(last && r[0]-last[1] < minGap) last[1]=r[1]; else merged.push([r[0],r[1]]);
+  const B=tc.length; if(B===0) return [];
+  let peak=0; for(const v of ptp) if(v>peak)peak=v;
+  const thr=Math.max(2, peak*0.15);
+  // ±2sのrolling maxで一時的な谷を埋める（工程内の振幅減衰で切れないように）
+  const HW=2.0, env=new Array(B);
+  for(let k=0;k<B;k++){
+    let m=0;
+    for(let a=k; a>=0 && tc[a]>=tc[k]-HW; a--) if(ptp[a]>m)m=ptp[a];
+    for(let a=k+1; a<B && tc[a]<=tc[k]+HW; a++) if(ptp[a]>m)m=ptp[a];
+    env[k]=m;
   }
+  const runs=[]; let k=0;
+  while(k<B){
+    if(env[k]>thr){ let m=k; while(m<B && env[m]>thr) m++; runs.push([tc[k],tc[m-1]]); k=m; }
+    else k++;
+  }
+  const minGap=1.5, minActive=1.0, merged=[];
+  for(const r of runs){ const last=merged[merged.length-1];
+    if(last && r[0]-last[1]<minGap) last[1]=r[1]; else merged.push([r[0],r[1]]); }
   const blocks=merged.filter(r=>r[1]-r[0]>=minActive);
   const bounds=[];
-  for(let k=1;k<blocks.length;k++) bounds.push(Math.round((blocks[k-1][1]+blocks[k][0])/2*10)/10);
+  for(let q=1;q<blocks.length;q++) bounds.push(Math.round((blocks[q-1][1]+blocks[q][0])/2*10)/10);
   return bounds;
 }
 
