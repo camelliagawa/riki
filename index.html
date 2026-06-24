@@ -84,7 +84,8 @@
         <li><span class="gst" id="gst5">○</span><span class="glabel">⑤ ゼロ中心で表示</span><button class="gbtn" id="gstep5">実行</button></li>
       </ol>
       <button class="primary" id="gapply" style="width:100%">①〜⑤をまとめて実行</button>
-      <div class="hint">各行「実行」で個別に、または一括適用。✓ はその整形が現在有効な状態です。境界が検出できない場合は「向き補正」の反転境界[s]を手入力してください。</div>
+      <button id="grawtoggle" style="width:100%;margin-top:6px">元データを表示（加工オフ）</button>
+      <div class="hint">各行「実行」で個別に、または一括適用。✓ はその整形が現在有効な状態です。境界が検出できない場合は「向き補正」の反転境界[s]を手入力してください。「元データを表示」で加工を一時オフ（設定は保持）。</div>
     </div>
     <details open>
       <summary>① 単位・換算</summary>
@@ -274,7 +275,7 @@ function defaultCfg(){
     titleText:"", xLabel:"time (s)", fLabel:"Force (N)", mLabel:"Moments (Nm)",
     fontSize:14, gridOn:true, legendOn:true,
     flipEnable:false, flipBounds:"", flipAxes:{}, perSegZero:false,
-    boundaryHide:0, hideRanges:"",
+    boundaryHide:0, hideRanges:"", showRaw:false,
   };
   AXES.forEach(a=>{ c.zero[a]=DEFAULT_ZERO; c.sens[a]=DEFAULT_SENS[a]; c.colors[a]=DEFAULT_COLORS[a]; c.visible[a]=true; c.flipAxes[a]=IS_MOMENT(a)?(a!=="My"):(a==="Fy"); });
   return c;
@@ -409,7 +410,7 @@ function parseHideRanges(){
   }).filter(Boolean);
 }
 function updateHideMask(){
-  if(!raw){ hideMask=null; return; }
+  if(!raw || cfg.showRaw){ hideMask=null; return; }
   const ranges=parseHideRanges();
   const bh=cfg.boundaryHide||0;
   const bounds= bh>0 ? parseBounds() : [];
@@ -424,7 +425,7 @@ function updateHideMask(){
   }
 }
 function updateFlipSeg(){
-  if(!raw || !cfg.flipEnable){ flipSeg=null; return; }
+  if(!raw || !cfg.flipEnable || cfg.showRaw){ flipSeg=null; return; }
   const bounds=parseBounds();
   if(bounds.length===0){ flipSeg=null; return; }
   const ts=timeInSeconds();
@@ -504,7 +505,7 @@ function detectBoundaries(){
 // 工程間の長い休止(ドリフト遷移区間)は除外し、各工程の真の零点を取る。
 let segZero=null; // {segOf:Int16Array, base:{axis:Float64Array}} or null
 function updateSegZero(){
-  if(!raw || !cfg.perSegZero){ segZero=null; return; }
+  if(!raw || !cfg.perSegZero || cfg.showRaw){ segZero=null; return; }
   const act=activityPerSample(); const {ts, ptpSample, peak}=act; const n=ts.length;
   const quietThr=Math.max(1.5, peak*0.10);
   const actThr=Math.max(2, peak*0.15);
@@ -586,7 +587,7 @@ function yAxisSpec(axes, auto, manual, isLsb){
   let range = auto ? undefined : manual;
   let autorange = isLsb ? true : (auto ? true : false);
   let zeroline=false, zerolinecolor="#bbb", zerolinewidth=1;
-  if(!isLsb && auto && cfg.zeroBaseline!=="auto"){
+  if(!isLsb && auto && cfg.zeroBaseline!=="auto" && !cfg.showRaw){
     const ext=computeExtent(axes);
     if(ext){
       if(cfg.zeroBaseline==="center"){
@@ -842,14 +843,27 @@ function applyRecommended(){
   setStatus(ok ? `おすすめ整形を適用しました（境界 ${document.getElementById("flipBounds").value} s）`
               : "境界を検出できず一部のみ適用しました。反転境界[s]を手入力してください。");
 }
+function toggleRaw(){
+  if(!raw){ setStatus("先にCSVを読み込んでください。"); return; }
+  cfg.showRaw=!cfg.showRaw;
+  draw();
+  setStatus(cfg.showRaw ? "元データ（加工オフ）を表示中。設定は保持しています。" : "加工後を表示しています。");
+}
 function updateGuideStatus(){
   const set=(id,on)=>{ const e=document.getElementById(id); if(!e) return;
     e.textContent=on?"✓":"○"; e.classList.toggle("on",on); };
+  const rawMode=cfg.showRaw;
+  // 元データ表示中は各整形は一時オフ（設定は保持）なので○表示
   set("gst1",cfg.excludeNoData);
-  set("gst2",cfg.perSegZero);
-  set("gst3",cfg.flipEnable && parseBounds().length>0);
-  set("gst4",(cfg.boundaryHide>0)||parseHideRanges().length>0);
-  set("gst5",cfg.zeroBaseline!=="auto");
+  set("gst2",cfg.perSegZero && !rawMode);
+  set("gst3",cfg.flipEnable && parseBounds().length>0 && !rawMode);
+  set("gst4",((cfg.boundaryHide>0)||parseHideRanges().length>0) && !rawMode);
+  set("gst5",cfg.zeroBaseline!=="auto" && !rawMode);
+  const tg=document.getElementById("grawtoggle");
+  if(tg){
+    tg.textContent = rawMode ? "● 元データ表示中 → 加工後に戻す" : "元データを表示（加工オフ）";
+    tg.classList.toggle("primary", rawMode);
+  }
 }
 
 // ===== 自動ゼロ =============================================================
@@ -936,6 +950,7 @@ function wire(){
   document.getElementById("autoZeroBtn").addEventListener("click",autoZero);
   for(let n=1;n<=5;n++) document.getElementById(`gstep${n}`).addEventListener("click",()=>gStep(n));
   document.getElementById("gapply").addEventListener("click",applyRecommended);
+  document.getElementById("grawtoggle").addEventListener("click",toggleRaw);
   document.getElementById("forceImgBtn").addEventListener("click",()=>exportImage("force"));
   document.getElementById("momentImgBtn").addEventListener("click",()=>exportImage("moment"));
   document.getElementById("bothImgBtn").addEventListener("click",()=>exportImage("both"));
