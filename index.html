@@ -79,6 +79,7 @@
   <span class="sub">ZEF / DynPick 6軸力覚センサ</span>
   <span class="spacer"></span>
   <span id="fileinfo" class="sub"></span>
+  <span id="verinfo" class="sub" title="アプリのバージョンと最終更新日時"></span>
   <button id="reloadBtn" title="別のCSVを読み込む">CSVを開く</button>
 </header>
 
@@ -270,6 +271,9 @@
 
 <script>
 "use strict";
+// ===== バージョン情報（更新時にここを書き換える） ==========================
+const APP_VERSION = "v1.1.0";
+const APP_UPDATED = "2026-07-07 11:31";   // 最終更新日時（JST, 分単位）
 // ===== 定数・既定値 =========================================================
 const AXES = ["Fx","Fy","Fz","Mx","My","Mz"];
 const IS_MOMENT = a => a[0]==="M";
@@ -1045,6 +1049,10 @@ function wire(){
 }
 
 // ===== 起動 =================================================================
+(function showVersion(){
+  const e=document.getElementById("verinfo");
+  if(e) e.textContent=`${APP_VERSION} ・ 更新 ${APP_UPDATED}`;
+})();
 buildDynamicRows();
 loadCfgFromStorage();
 cfgToUI();
