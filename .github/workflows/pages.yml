@@ -1,0 +1,63 @@
+name: Deploy to GitHub Pages
+
+# main へ push されるたびに、コミット日時（JST・分単位）とコミットSHA を
+# index.html に埋め込んでから GitHub Pages へ公開する。
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同時デプロイを抑止（進行中のものは残し、新しいものを待たせる）
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build site (embed commit metadata)
+        run: |
+          set -e
+          COMMIT_TIME="$(TZ=Asia/Tokyo git log -1 --date=format-local:'%Y-%m-%d %H:%M' --format=%cd)"
+          SHORT_SHA="$(git rev-parse --short HEAD)"
+          echo "Embedding: $COMMIT_TIME ($SHORT_SHA)"
+
+          # 公開用ディレクトリに必要ファイルのみコピー（.git 等は含めない）
+          mkdir -p _site
+          cp index.html sw.js README.md _site/
+          cp -r vendor _site/
+          [ -d sample ] && cp -r sample _site/ || true
+
+          # 既定値をコミット情報へ置換
+          sed -i "s|const APP_UPDATED = \"[^\"]*\";|const APP_UPDATED = \"${COMMIT_TIME}\";|" _site/index.html
+          sed -i "s|const APP_COMMIT = \"[^\"]*\";|const APP_COMMIT = \"${SHORT_SHA}\";|"   _site/index.html
+
+          echo "--- embedded lines ---"
+          grep -nE 'const APP_(VERSION|COMMIT|UPDATED)' _site/index.html
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
