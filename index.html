@@ -906,6 +906,7 @@ function ensureBoundsUI(){
 }
 function gStep(n){
   if(!raw){ setStatus("先にCSVを読み込んでください。"); return; }
+  cfg.showRaw=false;   // 整形を適用したら加工後表示に戻す（元データ表示中でも効くように）
   if(n===1){ document.getElementById("excludeNoData").checked=true; }
   if(n===2){ if(!ensureBoundsUI()) setStatus("境界を検出できません。反転境界[s]を手入力してください。"); document.getElementById("perSegZero").checked=true; }
   if(n===3){ if(!ensureBoundsUI()){ setStatus("境界を検出できません。反転境界[s]を手入力してください。"); return; } document.getElementById("flipEnable").checked=true; }
@@ -915,6 +916,7 @@ function gStep(n){
 }
 function applyRecommended(){
   if(!raw){ setStatus("先にCSVを読み込んでください。"); return; }
+  cfg.showRaw=false;   // 整形を適用したら加工後表示に戻す
   document.getElementById("excludeNoData").checked=true;
   const ok=ensureBoundsUI();
   if(ok){
