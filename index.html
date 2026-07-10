@@ -71,6 +71,22 @@
   .twocol{display:grid;grid-template-columns:1fr 1fr;gap:6px;}
   .twocol .row{margin:3px 0;}
   .pill{font-size:11px;padding:1px 6px;border-radius:10px;background:#eef2ff;color:var(--accent-d);}
+
+  /* ===== スマホ・狭幅画面対応 ===== */
+  @media (max-width:760px){
+    body{height:auto;min-height:100vh;overflow:auto;-webkit-text-size-adjust:100%;}
+    header{flex-wrap:wrap;gap:4px 10px;padding:8px 12px;}
+    header h1{font-size:15px;}
+    header .spacer{display:none;}
+    header button{margin-left:auto;}
+    main{flex-direction:column;min-height:0;}
+    /* グラフ／ドロップゾーンを上、設定サイドバーを下に */
+    #plotwrap{order:1;min-height:68vh;}
+    #plot{min-height:68vh;}
+    #dropzone{order:1;min-height:48vh;margin:10px;}
+    #sidebar{order:2;width:100%;flex:0 0 auto;overflow-y:visible;
+             border-right:none;border-top:1px solid var(--border);}
+  }
 </style>
 </head>
 <body>
@@ -275,7 +291,7 @@
 // APP_VERSION は手動のセマンティックバージョン（リリース時に更新）。
 // APP_COMMIT / APP_UPDATED は GitHub Actions のデプロイ時にコミットSHA・
 // コミット日時（JST, 分単位）へ自動置換される（ローカル直開き時は下記の既定値）。
-const APP_VERSION = "v1.1.0";
+const APP_VERSION = "v1.2.0";
 const APP_COMMIT = "local";
 const APP_UPDATED = "2026-07-07 11:31";
 // ===== 定数・既定値 =========================================================
