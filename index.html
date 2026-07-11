@@ -971,12 +971,18 @@ function renderFrame3D(t){
   while(lo<hi){ const mid=(lo+hi)>>1; if(ts[mid]<t) lo=mid+1; else hi=mid; }
   const idx=Math.min(lo, n-1);
   const F=arrowByIndex(idx, true), M=arrowByIndex(idx, false);
-  Plotly.restyle("plot3d", {x:[F.line.x,M.line.x], y:[F.line.y,M.line.y], z:[F.line.z,M.line.z]}, [0,2]);
+  // トレース順 [力線, 力コーン, モーメント線, モーメントコーン]。1回のrestyleにまとめて
+  // 再描画パスを1回に抑える（線トレースにu/v/w/sizerefはundefined＝変更なし）。
+  const U=undefined;
   Plotly.restyle("plot3d", {
-    x:[F.cone.x,M.cone.x], y:[F.cone.y,M.cone.y], z:[F.cone.z,M.cone.z],
-    u:[F.cone.u,M.cone.u], v:[F.cone.v,M.cone.v], w:[F.cone.w,M.cone.w],
-    sizeref:[frames3d.fMax*0.22, frames3d.mMax*0.22],
-  }, [1,3]);
+    x:[F.line.x, F.cone.x, M.line.x, M.cone.x],
+    y:[F.line.y, F.cone.y, M.line.y, M.cone.y],
+    z:[F.line.z, F.cone.z, M.line.z, M.cone.z],
+    u:[U, F.cone.u, U, M.cone.u],
+    v:[U, F.cone.v, U, M.cone.v],
+    w:[U, F.cone.w, U, M.cone.w],
+    sizeref:[U, frames3d.fMax*0.22, U, frames3d.mMax*0.22],
+  }, [0,1,2,3]);
   document.getElementById("magF3d").textContent = `|F| = ${F.mag.toFixed(2)} N`;
   document.getElementById("magM3d").textContent = `|M| = ${M.mag.toFixed(3)} Nm`;
   document.getElementById("time3d").textContent = `${t.toFixed(1)} / ${frames3d.duration.toFixed(1)} s`;
@@ -984,8 +990,14 @@ function renderFrame3D(t){
   document.getElementById("seek3d").value = d>0 ? Math.round((t/d)*1000) : 0;
 }
 
+// 3Dシーンのrestyleは1フレームあたり20〜50ms程度と重い。毎フレーム連続で回すと
+// メインスレッドが飽和し、スマホでは再生/一時停止のタップが取りこぼされる。
+// 再描画を約20fpsに制限してスレッドに余裕を作る（経過時間は実時間ベースで進める）。
+const MIN_FRAME_MS = 50;
 function tick3D(now){
   if(!anim3d.playing) return;
+  // 前回描画から十分な時間が経つまでは描画せず、次フレームを予約するだけ（軽い）。
+  if(now - anim3d.lastNow < MIN_FRAME_MS){ anim3d.raf=requestAnimationFrame(tick3D); return; }
   const dt=(now-anim3d.lastNow)/1000;
   anim3d.lastNow=now;
   anim3d.curTime += dt*anim3d.speed;
