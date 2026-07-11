@@ -39,6 +39,8 @@
   #viewTabs button.active{background:var(--panel);color:var(--text);font-weight:600;border-color:var(--border);}
   #plot3dwrap{flex:1;display:none;flex-direction:column;min-height:0;}
   #plot3dCtrl{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:8px 14px;border-bottom:1px solid var(--border);background:var(--panel);font-size:12.5px;}
+  #plot3dCtrl button,#plot3dCtrl input{touch-action:manipulation;}
+  #play3d{min-width:104px;}
   #plot3dCtrl .grp{gap:5px;}
   #speed3d{width:110px;}
   #seek3d{flex:1;min-width:140px;}
@@ -326,7 +328,7 @@
 // APP_VERSION は手動のセマンティックバージョン（リリース時に更新）。
 // APP_COMMIT / APP_UPDATED は GitHub Actions のデプロイ時にコミットSHA・
 // コミット日時（JST, 分単位）へ自動置換される（ローカル直開き時は下記の既定値）。
-const APP_VERSION = "v1.3.1";
+const APP_VERSION = "v1.3.2";
 const APP_COMMIT = "local";
 const APP_UPDATED = "2026-07-07 11:31";
 // ===== 定数・既定値 =========================================================
@@ -1301,7 +1303,20 @@ function wire(){
     if(!raw){ setStatus("先にCSVを読み込んでください。"); return; }
     showView("3d");
   });
-  document.getElementById("play3d").addEventListener("click",toggle3D);
+  // 再生/一時停止: アニメ描画でメインスレッドが混んでいてもタップを取りこぼさない
+  // よう、click ではなく pointerdown（指が触れた瞬間に発火）で反応させる。
+  // 直後に合成される click は短時間デバウンスで無視して二重トグルを防ぐ。
+  let lastToggle3d=0;
+  const onToggle3d=e=>{
+    if(e && e.cancelable) e.preventDefault();
+    const now=Date.now();
+    if(now-lastToggle3d<350) return;
+    lastToggle3d=now;
+    toggle3D();
+  };
+  const playBtn=document.getElementById("play3d");
+  playBtn.addEventListener("pointerdown",onToggle3d);
+  playBtn.addEventListener("click",onToggle3d);
   document.getElementById("speed3d").addEventListener("input",e=>{
     anim3d.speed=speedFromSlider(parseFloat(e.target.value));
     document.getElementById("speedLabel3d").textContent=
