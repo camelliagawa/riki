@@ -18,9 +18,11 @@ self.addEventListener("fetch", e => {
                 url.pathname.endsWith("index.html");
 
   if (isDoc) {
-    // ネットワーク優先（最新HTML）。失敗時のみキャッシュ。
+    // ネットワーク優先（最新HTML）。cache:"reload" でブラウザのHTTPキャッシュも
+    // 必ずバイパスしてサーバへ再検証させる（これが無いとCDN/ブラウザキャッシュに
+    // 委ねられ、更新後も古いHTMLが返ることがある）。失敗時のみキャッシュ。
     e.respondWith(
-      fetch(req).then(res => {
+      fetch(req, {cache:"reload"}).then(res => {
         caches.open(CACHE).then(c => c.put(req, res.clone())).catch(()=>{});
         return res;
       }).catch(() => caches.match(req))
